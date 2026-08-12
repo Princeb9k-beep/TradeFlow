@@ -138,6 +138,16 @@ def test_trading_core_paper_flow(client):
     assert r.status_code == 200 and len(r.json()["data"]["modules"]) >= 3
 
 
+def test_quote_matches_latest_candle(client):
+    """The synthetic series is one canonical walk: the quote's price must equal
+    the last candle's close regardless of how many bars were requested."""
+    trader = _auth(client, "consistent@example.com")
+    q = client.get("/trading/quote/TSLA", headers=trader).json()["data"]
+    for limit in (60, 200):
+        candles = client.get(f"/trading/candles/TSLA?timeframe=1d&limit={limit}", headers=trader).json()["data"]["candles"]
+        assert candles[-1]["c"] == q["price"], f"quote {q['price']} != last close at limit={limit}"
+
+
 def test_watchlist(client):
     trader = _auth(client, "watch@example.com")
     assert client.post("/trading/watchlist", json={"symbol": "nvda"}, headers=trader).status_code == 200

@@ -62,9 +62,17 @@ def _base_price(symbol: str) -> float:
     return 20.0 + (s % 400)
 
 
+# The synthetic walk is generated once at this canonical length and the last
+# `limit` bars are returned. Anchoring every request to the same series means
+# get_quote(2), get_candles(120), and analyze(200) all agree on the current
+# price — a shorter request is just a tail of the same walk, never a new one.
+_CANON_BARS = 400
+
+
 def _synthetic_candles(symbol: str, timeframe: str, limit: int) -> list[dict]:
     minutes, _ = TIMEFRAMES.get(timeframe, TIMEFRAMES["1d"])
     limit = max(2, min(limit, 500))
+    n = max(limit, _CANON_BARS)  # stable length so the tail is limit-independent
     day_ord = datetime.now(timezone.utc).date().toordinal()
     rng_state = (_seed(symbol) ^ (day_ord * 2654435761)) & 0xFFFFFFFF
 
@@ -83,8 +91,8 @@ def _synthetic_candles(symbol: str, timeframe: str, limit: int) -> list[dict]:
 
     bars: list[dict] = []
     price = anchor
-    for i in range(limit):
-        t = now - timedelta(minutes=minutes * (limit - 1 - i))
+    for i in range(n):
+        t = now - timedelta(minutes=minutes * (n - 1 - i))
         drift = (_next() - 0.48) * vol
         o = price
         c = max(0.5, o + drift)
@@ -98,7 +106,7 @@ def _synthetic_candles(symbol: str, timeframe: str, limit: int) -> list[dict]:
             "l": round(max(0.1, low), 2), "c": round(c, 2), "v": v,
         })
         price = c
-    return bars
+    return bars[-limit:]
 
 
 # --------------------------------------------------------------------------- #
