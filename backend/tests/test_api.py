@@ -148,6 +148,34 @@ def test_quote_matches_latest_candle(client):
         assert candles[-1]["c"] == q["price"], f"quote {q['price']} != last close at limit={limit}"
 
 
+def test_only_real_symbols(client):
+    """Synthetic mode must reject fabricated tickers and accept real ones."""
+    trader = _auth(client, "real@example.com")
+
+    # A real ticker resolves, with the company name attached.
+    q = client.get("/trading/quote/AAPL", headers=trader)
+    assert q.status_code == 200
+    assert q.json()["data"]["name"] == "Apple Inc."
+
+    # A fabricated ticker is rejected everywhere it could produce a chart.
+    for path, method, body in [
+        ("/trading/quote/FAKE123", "get", None),
+        ("/trading/candles/FAKE123", "get", None),
+        ("/trading/analyze/FAKE123", "get", None),
+        ("/trading/orders", "post", {"symbol": "FAKE123", "side": "buy", "quantity": 1}),
+        ("/trading/watchlist", "post", {"symbol": "FAKE123"}),
+    ]:
+        r = client.get(path, headers=trader) if method == "get" else client.post(path, json=body, headers=trader)
+        assert r.status_code == 404, f"{path} should reject a fake symbol"
+        assert r.json()["meta"]["code"] == "unknown_symbol"
+
+    # Symbol search returns real matches (ticker + name).
+    s = client.get("/trading/symbols?q=app", headers=trader)
+    assert s.status_code == 200
+    results = s.json()["data"]["symbols"]
+    assert any(x["symbol"] == "AAPL" and "Apple" in x["name"] for x in results)
+
+
 def test_watchlist(client):
     trader = _auth(client, "watch@example.com")
     assert client.post("/trading/watchlist", json={"symbol": "nvda"}, headers=trader).status_code == 200

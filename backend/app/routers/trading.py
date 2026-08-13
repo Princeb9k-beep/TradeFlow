@@ -24,6 +24,7 @@ from ..deps import get_current_user
 from ..market_data import DEFAULT_UNIVERSE, TIMEFRAMES, get_candles, get_quote, get_quotes
 from ..models import TradeJournalEntry, TradingOrder, User, Watchlist
 from ..responses import error, ok
+from .. import symbols
 from ..schemas import (
     AccountSettingsRequest,
     JournalRequest,
@@ -44,9 +45,39 @@ async def _account(session: AsyncSession, user: User):
     )
 
 
+def _unknown_symbol(symbol: str):
+    """Return an error response if `symbol` isn't a real, listed instrument.
+
+    Only enforced in synthetic-data mode — a fabricated ticker must never yield a
+    chart. With a live provider (Alpaca) the provider itself validates symbols,
+    so we don't second-guess it against a partial local catalog.
+    """
+    if get_settings().market_data_provider == "synthetic" and not symbols.is_known(symbol):
+        return error(
+            f"'{symbols.normalize(symbol)}' isn't a recognized ticker. "
+            "Search real symbols at /trading/symbols.",
+            status_code=404,
+            code="unknown_symbol",
+        )
+    return None
+
+
+# --- Symbol catalog / search ---------------------------------------------
+@router.get("/symbols")
+async def list_symbols(
+    q: str = Query(default=""),
+    limit: int = Query(default=20, ge=1, le=100),
+    _: User = Depends(get_current_user),
+) -> object:
+    return ok(data={"symbols": symbols.search(q, limit)}, message="Symbols")
+
+
 # --- Market data ----------------------------------------------------------
 @router.get("/quote/{symbol}")
 async def quote(symbol: str, _: User = Depends(get_current_user)) -> object:
+    bad = _unknown_symbol(symbol)
+    if bad:
+        return bad
     return ok(data=await get_quote(symbol), message="Quote")
 
 
@@ -59,6 +90,9 @@ async def candles(
 ) -> object:
     if timeframe not in TIMEFRAMES:
         return error(f"Unsupported timeframe. Use one of: {', '.join(TIMEFRAMES)}", code="bad_timeframe")
+    bad = _unknown_symbol(symbol)
+    if bad:
+        return bad
     bars = await get_candles(symbol, timeframe, limit)
     return ok(data={"symbol": symbol.upper(), "timeframe": timeframe, "candles": bars}, message="Candles")
 
@@ -84,6 +118,9 @@ async def add_watchlist(
     user: User = Depends(get_current_user),
     session: AsyncSession = Depends(get_session),
 ) -> object:
+    bad = _unknown_symbol(payload.symbol)
+    if bad:
+        return bad
     symbol = payload.symbol.strip().upper()
     existing = await session.execute(
         select(Watchlist).where(Watchlist.user_id == user.id, Watchlist.symbol == symbol)
@@ -181,6 +218,9 @@ async def place_order(
     user: User = Depends(get_current_user),
     session: AsyncSession = Depends(get_session),
 ) -> object:
+    bad = _unknown_symbol(payload.symbol)
+    if bad:
+        return bad
     acct = await _account(session, user)
     broker = select_broker(get_settings(), acct.mode)
     try:
@@ -239,6 +279,9 @@ async def analyze(
 ) -> object:
     if timeframe not in TIMEFRAMES:
         timeframe = "1d"
+    bad = _unknown_symbol(symbol)
+    if bad:
+        return bad
     series = await get_candles(symbol, timeframe, 200)
     result = await trade_ai.analyze_chart(symbol.upper(), series, timeframe)
     return ok(data=result, message="Analysis complete")
@@ -247,6 +290,8 @@ async def analyze(
 @router.post("/screen")
 async def screen(payload: ScreenRequest, _: User = Depends(get_current_user)) -> object:
     universe = [s.strip().upper() for s in payload.symbols if s.strip()] or DEFAULT_UNIVERSE
+    if get_settings().market_data_provider == "synthetic":
+        universe = [s for s in universe if symbols.is_known(s)] or DEFAULT_UNIVERSE
     candidates = []
     for sym in universe[:30]:
         series = await get_candles(sym, "1d", 200)

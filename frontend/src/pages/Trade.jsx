@@ -107,10 +107,17 @@ export default function Trade({ notify }) {
   const [analyzing, setAnalyzing] = useState(false);
   const [themeTick, setThemeTick] = useState(0);
 
+  const [catalog, setCatalog] = useState([]);
+  const nameMap = useMemo(() => Object.fromEntries(catalog.map((c) => [c.symbol, c.name])), [catalog]);
+
   useEffect(() => {
     const h = () => setThemeTick((t) => t + 1);
     window.addEventListener("theme:changed", h);
     return () => window.removeEventListener("theme:changed", h);
+  }, []);
+
+  useEffect(() => {
+    api.tradeSymbols("", 100).then((d) => setCatalog(d.symbols)).catch(() => {});
   }, []);
 
   const loadChart = useCallback(async (sym, tf) => {
@@ -163,10 +170,15 @@ export default function Trade({ notify }) {
         ))}
       </div>
 
+      {/* Autocomplete of real, listed tickers — shared by every symbol input. */}
+      <datalist id="symbol-list">
+        {catalog.map((c) => (<option key={c.symbol} value={c.symbol}>{c.name}</option>))}
+      </datalist>
+
       {tab === "chart" && (
         <>
           <form className="controls" onSubmit={(e) => { e.preventDefault(); pickSymbol(symbolInput); }}>
-            <input value={symbolInput} onChange={(e) => setSymbolInput(e.target.value.toUpperCase())} placeholder="Symbol (AAPL, BTC/USD…)" aria-label="Symbol" spellCheck="false" />
+            <input value={symbolInput} onChange={(e) => setSymbolInput(e.target.value.toUpperCase())} placeholder="Symbol (AAPL, BTC/USD…)" aria-label="Symbol" spellCheck="false" list="symbol-list" />
             <button className="btn" type="submit">Load</button>
             <div className="tf-group">
               {TIMEFRAMES.map((tf) => (
@@ -182,6 +194,7 @@ export default function Trade({ notify }) {
                   <span className="tick mono">{quote.symbol}</span>
                   <span className={`price mono ${quote.change >= 0 ? "up" : "down"}`}>{money(quote.price)}</span>
                   <span className={quote.change >= 0 ? "up" : "down"} style={{ fontWeight: 700 }}>{quote.change >= 0 ? "▲" : "▼"} {pct(quote.change_pct)}</span>
+                  {quote.name && <span className="muted" style={{ flexBasis: "100%", fontSize: 13 }}>{quote.name}</span>}
                 </div>
               )}
               {error && <ErrorBanner message={error} onRetry={() => loadChart(symbol, timeframe)} />}
@@ -226,13 +239,13 @@ export default function Trade({ notify }) {
               <OrderTicket symbol={symbol} price={quote?.price} account={account} onFilled={setAccount} notify={notify} />
               <Positions account={account} onPick={pickSymbol} onSold={loadAccount} notify={notify} />
               <PositionSizer defaultEquity={account?.equity} price={quote?.price} />
-              <Watchlist watch={watch} current={symbol} onPick={pickSymbol} reload={loadWatch} notify={notify} />
+              <Watchlist watch={watch} current={symbol} onPick={pickSymbol} reload={loadWatch} notify={notify} nameMap={nameMap} />
             </div>
           </div>
         </>
       )}
 
-      {tab === "screen" && <Screener universe={watch.symbols} onPick={pickSymbol} notify={notify} />}
+      {tab === "screen" && <Screener universe={watch.symbols} onPick={pickSymbol} notify={notify} nameMap={nameMap} />}
       {tab === "journal" && <Journal notify={notify} defaultSymbol={symbol} />}
       {tab === "learn" && <Academy />}
     </section>
@@ -328,7 +341,7 @@ function PositionSizer({ defaultEquity, price }) {
   );
 }
 
-function Watchlist({ watch, current, onPick, reload, notify }) {
+function Watchlist({ watch, current, onPick, reload, notify, nameMap = {} }) {
   const [add, setAdd] = useState("");
   async function addSym(e) {
     e.preventDefault();
@@ -344,7 +357,7 @@ function Watchlist({ watch, current, onPick, reload, notify }) {
     <div className="card">
       <h3>Watchlist</h3>
       <form className="wl-add" onSubmit={addSym}>
-        <input value={add} onChange={(e) => setAdd(e.target.value.toUpperCase())} placeholder="Add symbol" spellCheck="false" />
+        <input value={add} onChange={(e) => setAdd(e.target.value.toUpperCase())} placeholder="Add symbol" spellCheck="false" list="symbol-list" />
         <button className="btn ghost" type="submit" style={{ width: "auto" }}>+</button>
       </form>
       <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
@@ -352,7 +365,10 @@ function Watchlist({ watch, current, onPick, reload, notify }) {
           const q = quoteFor(sym);
           return (
             <div key={sym} className={`wl-row ${sym === current ? "active" : ""}`}>
-              <button className="chiplink" style={{ flex: 1 }} onClick={() => onPick(sym)}><b className="mono">{sym}</b></button>
+              <button className="chiplink" style={{ flex: 1, overflow: "hidden" }} onClick={() => onPick(sym)}>
+                <b className="mono">{sym}</b>
+                {nameMap[sym] && <span className="muted" style={{ display: "block", fontSize: 11, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{nameMap[sym]}</span>}
+              </button>
               {q && <span className={`mono ${q.change >= 0 ? "up" : "down"}`} style={{ fontSize: 12.5 }}>{money(q.price)} {pct(q.change_pct)}</span>}
               <button className="x" aria-label={`Remove ${sym}`} onClick={() => remove(sym)}>×</button>
             </div>
@@ -363,7 +379,7 @@ function Watchlist({ watch, current, onPick, reload, notify }) {
   );
 }
 
-function Screener({ universe, onPick, notify }) {
+function Screener({ universe, onPick, notify, nameMap = {} }) {
   const [query, setQuery] = useState("oversold stocks in an uptrend");
   const [res, setRes] = useState(null);
   const [busy, setBusy] = useState(false);
@@ -387,11 +403,12 @@ function Screener({ universe, onPick, notify }) {
           {res.results.length === 0 ? <p className="muted">Nothing matched. Try broadening the query.</p> : (
             <div className="tbl-wrap">
               <table>
-                <thead><tr><th>Symbol</th><th>Price</th><th>RSI</th><th>Trend</th><th>20d</th><th>Score</th></tr></thead>
+                <thead><tr><th>Symbol</th><th>Company</th><th>Price</th><th>RSI</th><th>Trend</th><th>20d</th><th>Score</th></tr></thead>
                 <tbody>
                   {res.results.map((r) => (
                     <tr key={r.symbol}>
                       <td><button className="chiplink" onClick={() => onPick(r.symbol)}><b className="mono">{r.symbol}</b></button></td>
+                      <td className="muted" style={{ fontSize: 13 }}>{nameMap[r.symbol] || "—"}</td>
                       <td className="mono">{money(r.price)}</td>
                       <td className="mono">{r.rsi14 ?? "—"}</td>
                       <td className={r.trend === "up" ? "up" : r.trend === "down" ? "down" : ""}>{r.trend}</td>
@@ -442,7 +459,7 @@ function Journal({ notify, defaultSymbol }) {
       <form className="card jform" onSubmit={submit}>
         <h3>Log a trade</h3>
         <div className="jgrid">
-          <label>Symbol<input className="mono" value={form.symbol} onChange={(e) => set("symbol", e.target.value.toUpperCase())} required /></label>
+          <label>Symbol<input className="mono" value={form.symbol} onChange={(e) => set("symbol", e.target.value.toUpperCase())} required list="symbol-list" /></label>
           <label>Side<select value={form.side} onChange={(e) => set("side", e.target.value)}><option value="buy">Buy / Long</option><option value="sell">Sell / Short</option></select></label>
           <label>Entry<input className="mono" type="number" step="0.01" value={form.entry_price} onChange={(e) => set("entry_price", e.target.value)} /></label>
           <label>Exit<input className="mono" type="number" step="0.01" value={form.exit_price} onChange={(e) => set("exit_price", e.target.value)} /></label>

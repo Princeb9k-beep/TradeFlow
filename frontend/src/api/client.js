@@ -54,6 +54,7 @@ export const api = {
   login: (data) => request("/auth/login", { method: "POST", body: data, auth: false }),
   me: () => request("/auth/me"),
   // trading
+  tradeSymbols: (q = "", limit = 50) => request(`/trading/symbols?q=${encodeURIComponent(q)}&limit=${limit}`),
   tradeQuote: (s) => request(`/trading/quote/${encodeURIComponent(s)}`),
   tradeCandles: (s, tf = "1d", limit = 120) =>
     request(`/trading/candles/${encodeURIComponent(s)}?timeframe=${tf}&limit=${limit}`),

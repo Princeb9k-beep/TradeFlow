@@ -24,6 +24,7 @@ from datetime import datetime, timedelta, timezone
 
 import httpx
 
+from . import symbols
 from .cache import cache_get, cache_set, make_key
 from .config import get_settings
 
@@ -37,10 +38,8 @@ TIMEFRAMES: dict[str, tuple[int, str]] = {
     "1d": (1440, "1Day"),
 }
 
-DEFAULT_UNIVERSE: list[str] = [
-    "AAPL", "MSFT", "NVDA", "AMZN", "GOOGL", "META", "TSLA", "AMD",
-    "NFLX", "JPM", "V", "DIS", "BA", "SPY", "QQQ", "BTC/USD", "ETH/USD",
-]
+# Real tickers only — sourced from the symbol catalog.
+DEFAULT_UNIVERSE: list[str] = symbols.default_universe()
 
 _CANDLE_TTL_SECONDS = 30
 
@@ -185,6 +184,7 @@ async def get_quote(symbol: str) -> dict:
     change_pct = round((change / prev) * 100, 2) if prev else 0.0
     return {
         "symbol": symbol,
+        "name": symbols.name_for(symbol),
         "price": round(last, 2),
         "prev_close": round(prev, 2),
         "change": change,
