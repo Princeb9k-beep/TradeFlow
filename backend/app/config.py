@@ -37,9 +37,14 @@ class Settings(BaseSettings):
     ai_cache_ttl_seconds: int = 60 * 60 * 24
 
     # --- Market data ------------------------------------------------------
-    # "synthetic" (default) needs no key/network — deterministic per-symbol
-    # series so the app runs and tests pass offline. "alpaca" pulls real bars.
-    market_data_provider: str = "synthetic"
+    # Provider for quotes & candles:
+    #   "yahoo"     — real market data, no API key (default). Degrades to
+    #                 synthetic automatically if unreachable.
+    #   "synthetic" — deterministic per-symbol series; no key/network, so the
+    #                 app and tests run fully offline.
+    #   "alpaca"    — real bars via an Alpaca account (set the keys below); also
+    #                 the path toward live order routing.
+    market_data_provider: str = "yahoo"
     alpaca_api_key: str = ""
     alpaca_api_secret: str = ""
     alpaca_data_url: str = "https://data.alpaca.markets"

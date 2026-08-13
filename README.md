@@ -12,6 +12,10 @@ coaches your trades, and keeps your risk in check.
 
 ## What it does
 
+- **Real market data, no key required** — real quotes and candles via Yahoo
+  Finance out of the box (stocks, ETFs, and crypto), falling back to a synthetic
+  series only when offline. Swap to Alpaca with a key when you want broker-grade
+  data + live execution.
 - **Charts** — candlestick charts with SMA overlays and AI-drawn support/
   resistance, rendered as dependency-free inline SVG (themes with the app).
 - **Paper trading** — a virtual-cash account. Market orders fill at the live
@@ -75,7 +79,8 @@ the box. Set `GROQ_API_KEY` for natural-language AI, and
 ## Roadmap
 
 - [x] Shared core: data, charts, paper account, AI read, screener, sizer, journal
-- [ ] Live market data (Alpaca) as the default provider
+- [x] Real market data by default (Yahoo, keyless) with synthetic fallback
+- [ ] Alpaca provider + broker connect for live execution (gated)
 - [ ] Beginner vs Pro surfaces over the shared core
 - [ ] Alerts + limit/stop orders
 - [ ] Broker connect flow for live execution (gated, with disclaimers)

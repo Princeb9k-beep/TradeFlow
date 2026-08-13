@@ -48,11 +48,12 @@ async def _account(session: AsyncSession, user: User):
 def _unknown_symbol(symbol: str):
     """Return an error response if `symbol` isn't a real, listed instrument.
 
-    Only enforced in synthetic-data mode — a fabricated ticker must never yield a
-    chart. With a live provider (Alpaca) the provider itself validates symbols,
-    so we don't second-guess it against a partial local catalog.
+    Enforced for the catalog-backed providers (yahoo, synthetic) so a fabricated
+    ticker can never yield a chart. With a broker provider (Alpaca) the provider
+    itself is the authority on tradable symbols, so we don't second-guess it
+    against a partial local catalog.
     """
-    if get_settings().market_data_provider == "synthetic" and not symbols.is_known(symbol):
+    if get_settings().market_data_provider != "alpaca" and not symbols.is_known(symbol):
         return error(
             f"'{symbols.normalize(symbol)}' isn't a recognized ticker. "
             "Search real symbols at /trading/symbols.",
@@ -73,7 +74,7 @@ async def list_symbols(
 
 
 # --- Market data ----------------------------------------------------------
-@router.get("/quote/{symbol}")
+@router.get("/quote/{symbol:path}")
 async def quote(symbol: str, _: User = Depends(get_current_user)) -> object:
     bad = _unknown_symbol(symbol)
     if bad:
@@ -81,7 +82,7 @@ async def quote(symbol: str, _: User = Depends(get_current_user)) -> object:
     return ok(data=await get_quote(symbol), message="Quote")
 
 
-@router.get("/candles/{symbol}")
+@router.get("/candles/{symbol:path}")
 async def candles(
     symbol: str,
     timeframe: str = Query(default="1d"),
@@ -131,7 +132,7 @@ async def add_watchlist(
     return ok(data={"symbol": symbol}, message=f"Added {symbol}")
 
 
-@router.delete("/watchlist/{symbol}")
+@router.delete("/watchlist/{symbol:path}")
 async def remove_watchlist(
     symbol: str,
     user: User = Depends(get_current_user),
@@ -271,7 +272,7 @@ async def order_history(
 
 
 # --- AI: analysis, screener, sizing --------------------------------------
-@router.get("/analyze/{symbol}")
+@router.get("/analyze/{symbol:path}")
 async def analyze(
     symbol: str,
     timeframe: str = Query(default="1d"),
@@ -290,7 +291,7 @@ async def analyze(
 @router.post("/screen")
 async def screen(payload: ScreenRequest, _: User = Depends(get_current_user)) -> object:
     universe = [s.strip().upper() for s in payload.symbols if s.strip()] or DEFAULT_UNIVERSE
-    if get_settings().market_data_provider == "synthetic":
+    if get_settings().market_data_provider != "alpaca":
         universe = [s for s in universe if symbols.is_known(s)] or DEFAULT_UNIVERSE
     candidates = []
     for sym in universe[:30]:

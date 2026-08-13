@@ -109,6 +109,55 @@ def _synthetic_candles(symbol: str, timeframe: str, limit: int) -> list[dict]:
 
 
 # --------------------------------------------------------------------------- #
+# Yahoo Finance provider (real data, no API key; best-effort)                 #
+# --------------------------------------------------------------------------- #
+# timeframe -> (range, interval). Range comfortably exceeds the 200 bars the
+# analysis needs while respecting Yahoo's intraday history caps.
+_YF: dict[str, tuple[str, str]] = {
+    "1m": ("1d", "1m"),
+    "5m": ("5d", "5m"),
+    "15m": ("1mo", "15m"),
+    "1h": ("3mo", "60m"),
+    "1d": ("1y", "1d"),
+}
+
+
+def _yahoo_symbol(symbol: str) -> str:
+    # Crypto pairs and class shares use a dash on Yahoo: BTC/USD -> BTC-USD,
+    # BRK.B -> BRK-B.
+    return symbol.replace("/", "-").replace(".", "-")
+
+
+async def _yahoo_candles(symbol: str, timeframe: str, limit: int) -> list[dict] | None:
+    rng, interval = _YF.get(timeframe, _YF["1d"])
+    url = f"https://query1.finance.yahoo.com/v8/finance/chart/{_yahoo_symbol(symbol)}"
+    params = {"range": rng, "interval": interval}
+    headers = {"User-Agent": "Mozilla/5.0"}
+    try:
+        async with httpx.AsyncClient(timeout=8.0) as http:
+            resp = await http.get(url, params=params, headers=headers)
+            resp.raise_for_status()
+            result = resp.json()["chart"]["result"][0]
+            ts = result["timestamp"]
+            q = result["indicators"]["quote"][0]
+    except Exception as exc:  # noqa: BLE001 - degrade to synthetic
+        logger.warning("Yahoo bars failed for %s: %s", symbol, exc)
+        return None
+
+    bars: list[dict] = []
+    for i, t in enumerate(ts):
+        o, h, low, c, v = q["open"][i], q["high"][i], q["low"][i], q["close"][i], q["volume"][i]
+        if o is None or h is None or low is None or c is None:
+            continue  # Yahoo pads gaps with nulls
+        bars.append({
+            "t": datetime.fromtimestamp(t, tz=timezone.utc).isoformat(),
+            "o": round(float(o), 2), "h": round(float(h), 2),
+            "l": round(float(low), 2), "c": round(float(c), 2), "v": float(v or 0),
+        })
+    return bars[-limit:] if bars else None
+
+
+# --------------------------------------------------------------------------- #
 # Alpaca provider (real data; best-effort)                                    #
 # --------------------------------------------------------------------------- #
 async def _alpaca_candles(symbol: str, timeframe: str, limit: int) -> list[dict] | None:
@@ -164,8 +213,11 @@ async def get_candles(symbol: str, timeframe: str = "1d", limit: int = 120) -> l
     if cached:
         return cached
 
+    provider = get_settings().market_data_provider
     bars: list[dict] | None = None
-    if get_settings().market_data_provider == "alpaca":
+    if provider == "yahoo":
+        bars = await _yahoo_candles(symbol, timeframe, limit)
+    elif provider == "alpaca":
         bars = await _alpaca_candles(symbol, timeframe, limit)
     if not bars:
         bars = _synthetic_candles(symbol, timeframe, limit)

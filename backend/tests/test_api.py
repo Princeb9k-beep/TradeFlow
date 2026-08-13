@@ -18,6 +18,9 @@ import sys
 _DB = pathlib.Path(__file__).parent / "test.db"
 os.environ["DATABASE_URL"] = f"sqlite+aiosqlite:///{_DB}"
 os.environ.setdefault("GROQ_API_KEY", "")
+# Tests run fully offline and deterministically against the synthetic provider,
+# regardless of the app's real-data default.
+os.environ["MARKET_DATA_PROVIDER"] = "synthetic"
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[1]))
 
 import asyncio  # noqa: E402
@@ -174,6 +177,17 @@ def test_only_real_symbols(client):
     assert s.status_code == 200
     results = s.json()["data"]["symbols"]
     assert any(x["symbol"] == "AAPL" and "Apple" in x["name"] for x in results)
+
+
+def test_crypto_symbol_with_slash(client):
+    """Slash-bearing symbols (crypto pairs) must route via {symbol:path}."""
+    trader = _auth(client, "crypto@example.com")
+    q = client.get("/trading/quote/BTC/USD", headers=trader)
+    assert q.status_code == 200
+    assert q.json()["data"]["symbol"] == "BTC/USD"
+    assert q.json()["data"]["name"] == "Bitcoin"
+    c = client.get("/trading/candles/BTC/USD?timeframe=1d&limit=10", headers=trader)
+    assert c.status_code == 200 and len(c.json()["data"]["candles"]) == 10
 
 
 def test_watchlist(client):

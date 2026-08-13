@@ -3,6 +3,10 @@
 // human-readable message on failure. Auth is a JWT Bearer token in localStorage.
 
 const BASE = import.meta.env.VITE_API_BASE_URL ?? "";
+
+// Encode a symbol for a URL path while preserving "/" (e.g. BTC/USD), which the
+// backend's {symbol:path} routes expect as a literal slash.
+const sym = (s) => encodeURIComponent(s).replace(/%2F/gi, "/");
 const TOKEN_KEY = "tradeflow_token";
 
 export function getToken() {
@@ -53,20 +57,21 @@ export const api = {
   signup: (data) => request("/auth/signup", { method: "POST", body: data, auth: false }),
   login: (data) => request("/auth/login", { method: "POST", body: data, auth: false }),
   me: () => request("/auth/me"),
-  // trading
+  // trading — sym() keeps a literal "/" (crypto pairs like BTC/USD) so it maps
+  // to the backend's {symbol:path} route instead of a %2F the router won't match.
   tradeSymbols: (q = "", limit = 50) => request(`/trading/symbols?q=${encodeURIComponent(q)}&limit=${limit}`),
-  tradeQuote: (s) => request(`/trading/quote/${encodeURIComponent(s)}`),
+  tradeQuote: (s) => request(`/trading/quote/${sym(s)}`),
   tradeCandles: (s, tf = "1d", limit = 120) =>
-    request(`/trading/candles/${encodeURIComponent(s)}?timeframe=${tf}&limit=${limit}`),
+    request(`/trading/candles/${sym(s)}?timeframe=${tf}&limit=${limit}`),
   tradeWatchlist: () => request("/trading/watchlist"),
   tradeAddWatch: (symbol) => request("/trading/watchlist", { method: "POST", body: { symbol } }),
-  tradeRemoveWatch: (s) => request(`/trading/watchlist/${encodeURIComponent(s)}`, { method: "DELETE" }),
+  tradeRemoveWatch: (s) => request(`/trading/watchlist/${sym(s)}`, { method: "DELETE" }),
   tradeAccount: () => request("/trading/account"),
   tradeAccountSettings: (data) => request("/trading/account/settings", { method: "POST", body: data }),
   tradeOrder: (symbol, side, quantity, note) =>
     request("/trading/orders", { method: "POST", body: { symbol, side, quantity, note } }),
   tradeOrders: () => request("/trading/orders"),
-  tradeAnalyze: (s, tf = "1d") => request(`/trading/analyze/${encodeURIComponent(s)}?timeframe=${tf}`),
+  tradeAnalyze: (s, tf = "1d") => request(`/trading/analyze/${sym(s)}?timeframe=${tf}`),
   tradeScreen: (query, symbols = []) => request("/trading/screen", { method: "POST", body: { query, symbols } }),
   tradePositionSize: (data) => request("/trading/position-size", { method: "POST", body: data }),
   tradeJournal: () => request("/trading/journal"),
