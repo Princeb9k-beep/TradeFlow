@@ -93,7 +93,23 @@ export default function ProChart({ candles, levels, symbol, themeTick }) {
       // Pin the locale so axis/price formatting never depends on a host locale
       // the browser's Intl can't parse.
       localization: { locale: "en-US" },
-      layout: { background: { color: "transparent" }, textColor: cssVar("--muted", "#8b93a7"), fontFamily: "ui-sans-serif, system-ui, sans-serif" },
+      // Our brand, not the library's: hide the attribution logo, show a faint
+      // Tradeflow watermark instead.
+      watermark: {
+        visible: true,
+        text: "TRADEFLOW",
+        fontSize: 42,
+        horzAlign: "center",
+        vertAlign: "center",
+        color: "rgba(130,140,160,0.10)",
+        fontFamily: "ui-sans-serif, system-ui, sans-serif",
+      },
+      layout: {
+        background: { color: "transparent" },
+        textColor: cssVar("--muted", "#8b93a7"),
+        fontFamily: "ui-sans-serif, system-ui, sans-serif",
+        attributionLogo: false,
+      },
       grid: { vertLines: { color: cssVar("--grid", "rgba(255,255,255,.05)") }, horzLines: { color: cssVar("--grid", "rgba(255,255,255,.05)") } },
       crosshair: { mode: CrosshairMode.Normal },
       rightPriceScale: { borderColor: cssVar("--border", "#262c3a") },
