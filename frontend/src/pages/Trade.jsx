@@ -9,7 +9,7 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import { api } from "../api/client.js";
 import ProChart from "./ProChart.jsx";
 
-const TIMEFRAMES = ["15m", "1h", "1d"];
+const TIMEFRAMES = ["1m", "5m", "15m", "1h", "1d"];
 const MARKET_LABEL = {
   REGULAR: "Live", PRE: "Pre-market", PREPRE: "Pre-market",
   POST: "After hours", POSTPOST: "After hours", CLOSED: "Market closed",
@@ -167,7 +167,7 @@ export default function Trade({ notify }) {
               )}
               {error && <ErrorBanner message={error} onRetry={() => loadChart(symbol, timeframe)} />}
               {loading ? <LoadingState label="Loading chart…" /> : (
-                <ProChart candles={candles} levels={analysis?.levels} symbol={symbol} themeTick={themeTick} />
+                <ProChart candles={candles} levels={analysis?.levels} symbol={symbol} timeframe={timeframe} themeTick={themeTick} />
               )}
 
               <div className="card" style={{ marginTop: 14 }}>
@@ -214,23 +214,67 @@ export default function Trade({ notify }) {
 
 function OrderTicket({ symbol, price, account, onFilled, notify }) {
   const [qty, setQty] = useState(10);
+  const [stop, setStop] = useState("");
   const [busy, setBusy] = useState(false);
   const cost = price ? price * (Number(qty) || 0) : null;
   const locked = account?.locked;
-  async function submit(side) {
-    if (!qty || qty <= 0) return;
+  const cash = account?.cash || 0;
+  const equity = account?.equity || 0;
+  const riskPct = account?.risk_per_trade_pct ?? 1;
+
+  const perShare = price && stop ? Math.abs(price - Number(stop)) : 0;
+  const riskAmt = perShare && qty ? perShare * Number(qty) : 0;
+
+  const submit = useCallback(async (side) => {
+    if (!qty || qty <= 0 || busy || locked) return;
     setBusy(true);
     try {
       const res = await api.tradeOrder(symbol, side, Number(qty));
       onFilled(res.account);
       notify(`${side === "buy" ? "Bought" : "Sold"} ${qty} ${symbol} @ ${money(res.order.price)}`);
     } catch (err) { notify(err.message); } finally { setBusy(false); }
+  }, [qty, busy, locked, symbol, onFilled, notify]);
+
+  // B / S hotkeys (ignored while typing in a field)
+  useEffect(() => {
+    const h = (e) => {
+      const tag = (e.target.tagName || "").toLowerCase();
+      if (tag === "input" || tag === "textarea" || tag === "select") return;
+      if (e.key === "b" || e.key === "B") submit("buy");
+      if (e.key === "s" || e.key === "S") submit("sell");
+    };
+    window.addEventListener("keydown", h);
+    return () => window.removeEventListener("keydown", h);
+  }, [submit]);
+
+  function quick(frac) { if (price) setQty(Math.max(1, Math.floor((cash * frac) / price))); }
+  function sizeFromRisk() {
+    if (!price || !stop || perShare <= 0) { notify("Enter a stop to size from risk"); return; }
+    const n = Math.floor((equity * (riskPct / 100)) / perShare);
+    if (n < 1) { notify("Risk too small for one share at this stop"); return; }
+    setQty(n);
   }
+
   return (
     <div className="card">
-      <h3>Order ticket</h3>
-      <div className="muted mono" style={{ fontSize: 13, marginBottom: 8 }}>{symbol} @ {money(price)}</div>
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline" }}>
+        <h3 style={{ margin: 0 }}>Order ticket</h3>
+        <span className="muted" style={{ fontSize: 11 }}>hotkeys B / S</span>
+      </div>
+      <div className="muted mono" style={{ fontSize: 13, margin: "8px 0" }}>{symbol} @ {money(price)}</div>
       <label>Quantity<input className="mono" type="number" min="0" step="1" value={qty} onChange={(e) => setQty(e.target.value)} /></label>
+      <div className="qty-quick">
+        {[["25%", 0.25], ["50%", 0.5], ["100%", 1]].map(([l, f]) => (
+          <button key={l} type="button" className="mini-btn" onClick={() => quick(f)}>{l}</button>
+        ))}
+      </div>
+      <label style={{ marginTop: 8 }}>Stop (optional, for risk sizing)
+        <input className="mono" type="number" step="0.01" value={stop} onChange={(e) => setStop(e.target.value)} placeholder="e.g. below support" />
+      </label>
+      <div className="qty-quick">
+        <button type="button" className="mini-btn" onClick={sizeFromRisk}>Size {riskPct}% risk</button>
+        {riskAmt > 0 && <span className="muted mono" style={{ fontSize: 12, alignSelf: "center" }}>risk {money(riskAmt)}</span>}
+      </div>
       <div className="est"><span>Est. cost</span> <b className="mono">{money(cost)}</b></div>
       {locked && <p className="down" style={{ fontSize: 13 }}>Account locked — daily loss limit hit.</p>}
       <div className="bs">
