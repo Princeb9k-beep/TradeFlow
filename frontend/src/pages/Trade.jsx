@@ -7,6 +7,7 @@
 
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { api } from "../api/client.js";
+import ProChart from "./ProChart.jsx";
 
 const TIMEFRAMES = ["15m", "1h", "1d"];
 const MARKET_LABEL = {
@@ -18,79 +19,9 @@ const marketLabel = (s) => MARKET_LABEL[s] ?? (s ? s.toLowerCase() : "");
 const money = (n) => (n == null || isNaN(n) ? "—" : n.toLocaleString(undefined, { style: "currency", currency: "USD" }));
 const pct = (n) => (n == null || isNaN(n) ? "—" : `${n > 0 ? "+" : ""}${n.toFixed(2)}%`);
 
-function sma(closes, period) {
-  const out = Array(closes.length).fill(null);
-  for (let i = period - 1; i < closes.length; i++) {
-    let s = 0;
-    for (let j = i - period + 1; j <= i; j++) s += closes[j];
-    out[i] = s / period;
-  }
-  return out;
-}
-
-function palette() {
-  const c = getComputedStyle(document.documentElement);
-  const g = (n) => c.getPropertyValue(n).trim() || "#888";
-  return { up: g("--up"), down: g("--down"), grid: g("--grid"), muted: g("--muted") };
-}
-
 function LoadingState({ label = "Loading…" }) { return <div className="state" role="status">{label}</div>; }
 function ErrorBanner({ message, onRetry }) {
   return <div className="state state-error" role="alert"><p>{message}</p>{onRetry && <button className="btn ghost" onClick={onRetry}>Try again</button>}</div>;
-}
-
-function CandleChart({ candles, levels, themeTick }) {
-  const pal = useMemo(() => palette(), [themeTick, candles]);
-  const W = 760, H = 360, padL = 6, padR = 56, padT = 10, volH = 46, priceH = H - volH - padT - 16;
-
-  const g = useMemo(() => {
-    if (!candles?.length) return null;
-    let hi = Math.max(...candles.map((c) => c.h));
-    let lo = Math.min(...candles.map((c) => c.l));
-    const lv = [levels?.support, levels?.resistance].filter((v) => v != null);
-    lv.forEach((v) => { hi = Math.max(hi, v); lo = Math.min(lo, v); });
-    const pad = (hi - lo) * 0.06 || 1; hi += pad; lo -= pad;
-    const maxVol = Math.max(...candles.map((c) => c.v), 1);
-    const n = candles.length, plotW = W - padL - padR, step = plotW / n, bodyW = Math.max(1.4, step * 0.62);
-    const x = (i) => padL + step * i + step / 2;
-    const y = (p) => padT + (hi - p) * (priceH / (hi - lo));
-    const volBase = padT + priceH + 12 + volH;
-    const vy = (v) => padT + priceH + 12 + (volH - (v / maxVol) * volH);
-    return { hi, lo, n, x, y, vy, volBase, bodyW };
-  }, [candles, levels]);
-
-  if (!g) return <div className="state">No chart data.</div>;
-  const { x, y, vy, volBase, bodyW } = g;
-  const closes = candles.map((c) => c.c);
-  const s20 = sma(closes, 20), s50 = sma(closes, 50);
-  const line = (arr) => arr.map((v, i) => (v == null ? null : `${x(i)},${y(v)}`)).filter(Boolean).join(" ");
-  const ticks = Array.from({ length: 5 }, (_, k) => { const p = g.lo + ((g.hi - g.lo) * k) / 4; return { p, yy: y(p) }; });
-
-  return (
-    <svg className="chart" viewBox={`0 0 ${W} ${H}`} preserveAspectRatio="xMidYMid meet" role="img" aria-label="Price candlestick chart">
-      {ticks.map((t, i) => (
-        <g key={i}>
-          <line x1={padL} x2={W - padR} y1={t.yy} y2={t.yy} stroke={pal.grid} strokeWidth="1" />
-          <text x={W - padR + 5} y={t.yy + 3.5} fontSize="10.5" fontFamily="ui-monospace, monospace" fill={pal.muted}>{t.p.toFixed(2)}</text>
-        </g>
-      ))}
-      {levels?.support != null && <line x1={padL} x2={W - padR} y1={y(levels.support)} y2={y(levels.support)} stroke={pal.up} strokeWidth="1" strokeDasharray="5 4" opacity="0.85" />}
-      {levels?.resistance != null && <line x1={padL} x2={W - padR} y1={y(levels.resistance)} y2={y(levels.resistance)} stroke={pal.down} strokeWidth="1" strokeDasharray="5 4" opacity="0.85" />}
-      {candles.map((c, i) => {
-        const up = c.c >= c.o, col = up ? pal.up : pal.down;
-        const bt = y(Math.max(c.o, c.c)), bb = y(Math.min(c.o, c.c));
-        return (
-          <g key={i}>
-            <line x1={x(i)} x2={x(i)} y1={y(c.h)} y2={y(c.l)} stroke={col} strokeWidth="1" />
-            <rect x={x(i) - bodyW / 2} y={bt} width={bodyW} height={Math.max(1, bb - bt)} fill={col} />
-            <rect x={x(i) - bodyW / 2} y={vy(c.v)} width={bodyW} height={volBase - vy(c.v)} fill={col} opacity="0.3" />
-          </g>
-        );
-      })}
-      <polyline points={line(s20)} fill="none" stroke="#f5a623" strokeWidth="1.6" opacity="0.95" />
-      <polyline points={line(s50)} fill="none" stroke="#3b82f6" strokeWidth="1.6" opacity="0.95" />
-    </svg>
-  );
 }
 
 function Stat({ label, value, tone }) {
@@ -236,15 +167,7 @@ export default function Trade({ notify }) {
               )}
               {error && <ErrorBanner message={error} onRetry={() => loadChart(symbol, timeframe)} />}
               {loading ? <LoadingState label="Loading chart…" /> : (
-                <>
-                  <div className="chart-shell"><CandleChart candles={candles} levels={analysis?.levels} themeTick={themeTick} /></div>
-                  <div className="legend">
-                    <span><span className="sw" style={{ background: "#f5a623" }} />SMA20</span>
-                    <span><span className="sw" style={{ background: "#3b82f6" }} />SMA50</span>
-                    {analysis?.levels?.support != null && <span><span className="sw" style={{ background: "var(--up)" }} />support</span>}
-                    {analysis?.levels?.resistance != null && <span><span className="sw" style={{ background: "var(--down)" }} />resistance</span>}
-                  </div>
-                </>
+                <ProChart candles={candles} levels={analysis?.levels} symbol={symbol} themeTick={themeTick} />
               )}
 
               <div className="card" style={{ marginTop: 14 }}>

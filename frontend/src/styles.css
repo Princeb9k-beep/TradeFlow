@@ -98,6 +98,14 @@ label input, label select, label textarea { margin-top: 4px; }
 .quote { display: flex; align-items: baseline; gap: 16px; flex-wrap: wrap; margin-bottom: 10px; }
 .quote .tick { font-size: 24px; font-weight: 750; }
 .quote .price { font-size: 24px; font-weight: 700; }
+.chart-toolbar { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; justify-content: space-between; margin-bottom: 8px; }
+.tool-group { display: flex; gap: 4px; flex-wrap: wrap; align-items: center; }
+.tool-btn { width: 32px; height: 30px; border: 1px solid var(--border); background: var(--surface-2); color: var(--text); border-radius: 8px; font-size: 14px; display: grid; place-items: center; padding: 0; }
+.tool-btn:hover { border-color: var(--accent); }
+.tool-btn.active { background: var(--accent-soft); color: var(--accent); border-color: color-mix(in srgb, var(--accent) 30%, transparent); }
+.ind-group { justify-content: flex-end; }
+.chip-toggle { border: 1px solid var(--border); background: var(--surface-2); color: var(--muted); border-radius: 999px; padding: 4px 10px; font-size: 12px; font-weight: 600; }
+.chip-toggle.on { background: var(--accent-soft); color: var(--accent); border-color: color-mix(in srgb, var(--accent) 30%, transparent); }
 .live-badge { display: inline-flex; align-items: center; gap: 6px; font-size: 12px; color: var(--muted); font-variant-numeric: tabular-nums; }
 .live-dot { width: 8px; height: 8px; border-radius: 50%; background: var(--muted); display: inline-block; }
 .live-dot.on { background: var(--up); box-shadow: 0 0 0 0 color-mix(in srgb, var(--up) 70%, transparent); animation: livepulse 1.8s ease-out infinite; }
