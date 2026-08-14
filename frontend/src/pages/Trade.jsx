@@ -9,6 +9,12 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import { api } from "../api/client.js";
 
 const TIMEFRAMES = ["15m", "1h", "1d"];
+const MARKET_LABEL = {
+  REGULAR: "Live", PRE: "Pre-market", PREPRE: "Pre-market",
+  POST: "After hours", POSTPOST: "After hours", CLOSED: "Market closed",
+  SIMULATED: "Simulated", DELAYED: "Delayed", UNKNOWN: "",
+};
+const marketLabel = (s) => MARKET_LABEL[s] ?? (s ? s.toLowerCase() : "");
 const money = (n) => (n == null || isNaN(n) ? "—" : n.toLocaleString(undefined, { style: "currency", currency: "USD" }));
 const pct = (n) => (n == null || isNaN(n) ? "—" : `${n > 0 ? "+" : ""}${n.toFixed(2)}%`);
 
@@ -106,6 +112,8 @@ export default function Trade({ notify }) {
   const [loading, setLoading] = useState(true);
   const [analyzing, setAnalyzing] = useState(false);
   const [themeTick, setThemeTick] = useState(0);
+  const [lastUpdated, setLastUpdated] = useState(null);
+  const [nowTick, setNowTick] = useState(Date.now());
 
   const [catalog, setCatalog] = useState([]);
   const nameMap = useMemo(() => Object.fromEntries(catalog.map((c) => [c.symbol, c.name])), [catalog]);
@@ -124,7 +132,7 @@ export default function Trade({ notify }) {
     setLoading(true); setError(null); setAnalysis(null);
     try {
       const [c, q] = await Promise.all([api.tradeCandles(sym, tf, 120), api.tradeQuote(sym)]);
-      setCandles(c.candles); setQuote(q);
+      setCandles(c.candles); setQuote(q); setLastUpdated(Date.now());
     } catch (err) { setError(err.message); } finally { setLoading(false); }
   }, []);
 
@@ -137,6 +145,30 @@ export default function Trade({ notify }) {
 
   useEffect(() => { loadChart(symbol, timeframe); }, [symbol, timeframe, loadChart]);
   useEffect(() => { loadAccount(); loadWatch(); }, [loadAccount, loadWatch]);
+
+  // Silent refresh — updates chart, quote, positions, and watchlist in place
+  // (no loading spinner) so prices tick over on their own.
+  const refresh = useCallback(async () => {
+    try {
+      const [c, q] = await Promise.all([api.tradeCandles(symbol, timeframe, 120), api.tradeQuote(symbol)]);
+      setCandles(c.candles); setQuote(q); setLastUpdated(Date.now());
+    } catch { /* keep the last good data */ }
+    loadAccount(); loadWatch();
+  }, [symbol, timeframe, loadAccount, loadWatch]);
+
+  // Poll every 15s while the tab is visible (real-time updates).
+  useEffect(() => {
+    const id = setInterval(() => {
+      if (typeof document === "undefined" || !document.hidden) refresh();
+    }, 15000);
+    return () => clearInterval(id);
+  }, [refresh]);
+
+  // 1s heartbeat so the "updated Ns ago" label stays honest.
+  useEffect(() => {
+    const id = setInterval(() => setNowTick(Date.now()), 1000);
+    return () => clearInterval(id);
+  }, []);
 
   function pickSymbol(sym) {
     const s = (sym || "").trim().toUpperCase();
@@ -194,6 +226,11 @@ export default function Trade({ notify }) {
                   <span className="tick mono">{quote.symbol}</span>
                   <span className={`price mono ${quote.change >= 0 ? "up" : "down"}`}>{money(quote.price)}</span>
                   <span className={quote.change >= 0 ? "up" : "down"} style={{ fontWeight: 700 }}>{quote.change >= 0 ? "▲" : "▼"} {pct(quote.change_pct)}</span>
+                  <span className="live-badge" style={{ marginLeft: "auto" }}>
+                    <span className={`live-dot ${quote.market_state === "REGULAR" ? "on" : ""}`} />
+                    {marketLabel(quote.market_state)}
+                    {lastUpdated ? ` · updated ${Math.max(0, Math.round((nowTick - lastUpdated) / 1000))}s ago` : ""}
+                  </span>
                   {quote.name && <span className="muted" style={{ flexBasis: "100%", fontSize: 13 }}>{quote.name}</span>}
                 </div>
               )}

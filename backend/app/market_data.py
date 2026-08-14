@@ -20,6 +20,7 @@ from __future__ import annotations
 import hashlib
 import logging
 import math
+import time
 from datetime import datetime, timedelta, timezone
 
 import httpx
@@ -41,7 +42,10 @@ TIMEFRAMES: dict[str, tuple[int, str]] = {
 # Real tickers only — sourced from the symbol catalog.
 DEFAULT_UNIVERSE: list[str] = symbols.default_universe()
 
-_CANDLE_TTL_SECONDS = 30
+# Short cache windows keep the UI live while sparing the upstream: candles are
+# re-fetched at most every ~10s, real-time quotes every ~4s.
+_CANDLE_TTL_SECONDS = 10
+_QUOTE_TTL_SECONDS = 4
 
 
 # --------------------------------------------------------------------------- #
@@ -157,6 +161,51 @@ async def _yahoo_candles(symbol: str, timeframe: str, limit: int) -> list[dict] 
     return bars[-limit:] if bars else None
 
 
+async def _yahoo_quote(symbol: str) -> dict | None:
+    """A real-time-ish quote from Yahoo's chart `meta`: the live regular-market
+    price, the previous close, and the current market state (regular / pre /
+    post / closed)."""
+    url = f"https://query1.finance.yahoo.com/v8/finance/chart/{_yahoo_symbol(symbol)}"
+    params = {"range": "1d", "interval": "1m"}
+    headers = {"User-Agent": "Mozilla/5.0"}
+    try:
+        async with httpx.AsyncClient(timeout=8.0) as http:
+            resp = await http.get(url, params=params, headers=headers)
+            resp.raise_for_status()
+            meta = resp.json()["chart"]["result"][0]["meta"]
+    except Exception as exc:  # noqa: BLE001 - degrade to candle-derived
+        logger.warning("Yahoo quote failed for %s: %s", symbol, exc)
+        return None
+    price = meta.get("regularMarketPrice")
+    if price is None:
+        return None
+    prev = meta.get("chartPreviousClose") or meta.get("previousClose") or price
+    return {
+        "price": float(price),
+        "prev_close": float(prev),
+        "market_state": meta.get("marketState") or _derive_market_state(meta),
+    }
+
+
+def _derive_market_state(meta: dict) -> str:
+    """Yahoo doesn't always send `marketState`; derive it from the trading-period
+    windows in the chart meta (epoch seconds). Crypto trades continuously, so its
+    regular window spans the day and this reads REGULAR."""
+    tp = meta.get("currentTradingPeriod") or {}
+    now = time.time()
+
+    def within(period) -> bool:
+        return bool(period) and float(period.get("start", 0)) <= now < float(period.get("end", 0))
+
+    if within(tp.get("regular")):
+        return "REGULAR"
+    if within(tp.get("pre")):
+        return "PRE"
+    if within(tp.get("post")):
+        return "POST"
+    return "CLOSED"
+
+
 # --------------------------------------------------------------------------- #
 # Alpaca provider (real data; best-effort)                                    #
 # --------------------------------------------------------------------------- #
@@ -226,23 +275,45 @@ async def get_candles(symbol: str, timeframe: str = "1d", limit: int = 120) -> l
     return bars
 
 
-async def get_quote(symbol: str) -> dict:
-    """Return a lightweight quote derived from the two most recent bars."""
-    symbol = symbol.strip().upper()
-    bars = await get_candles(symbol, "1d", 2)
-    last = bars[-1]["c"] if bars else _base_price(symbol)
-    prev = bars[-2]["c"] if len(bars) >= 2 else last
-    change = round(last - prev, 4)
+def _quote_payload(symbol: str, price: float, prev: float, market_state: str) -> dict:
+    change = round(price - prev, 4)
     change_pct = round((change / prev) * 100, 2) if prev else 0.0
     return {
         "symbol": symbol,
         "name": symbols.name_for(symbol),
-        "price": round(last, 2),
+        "price": round(price, 2),
         "prev_close": round(prev, 2),
         "change": change,
         "change_pct": change_pct,
+        "market_state": market_state,
         "as_of": datetime.now(timezone.utc).isoformat(),
     }
+
+
+async def get_quote(symbol: str) -> dict:
+    """Return a real-time quote. With the Yahoo provider this is the live
+    regular-market price (short-cached); otherwise it's derived from the latest
+    bar. Never raises."""
+    symbol = symbol.strip().upper()
+    provider = get_settings().market_data_provider
+
+    if provider == "yahoo":
+        key = make_key("quote", symbol)
+        cached = await cache_get(key)
+        if cached:
+            return cached
+        rq = await _yahoo_quote(symbol)
+        if rq:
+            q = _quote_payload(symbol, rq["price"], rq["prev_close"], rq["market_state"])
+            await cache_set(key, q, ttl=_QUOTE_TTL_SECONDS)
+            return q
+
+    # Fallback: derive from the two most recent bars (synthetic, or a Yahoo miss).
+    bars = await get_candles(symbol, "1d", 2)
+    last = bars[-1]["c"] if bars else _base_price(symbol)
+    prev = bars[-2]["c"] if len(bars) >= 2 else last
+    state = "SIMULATED" if provider == "synthetic" else "DELAYED"
+    return _quote_payload(symbol, last, prev, state)
 
 
 async def get_quotes(symbols: list[str]) -> list[dict]:
