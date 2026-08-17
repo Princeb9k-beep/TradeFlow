@@ -196,3 +196,92 @@ def position_plan(
         "pct_of_equity": round((notional / equity) * 100, 1) if equity else 0.0,
         "targets": targets,
     }
+
+
+# --------------------------------------------------------------------------- #
+# Market structure — swing pivots, HH/HL/LH/LL, trend event                   #
+# --------------------------------------------------------------------------- #
+def _pivots(series: list[dict], k: int = 2) -> tuple[list[dict], list[dict]]:
+    """Fractal swing highs/lows: a bar whose high (low) exceeds its k neighbours
+    on both sides. Returns (swing_highs, swing_lows) as [{index, price}]."""
+    highs, lows = [], []
+    n = len(series)
+    for i in range(k, n - k):
+        h = float(series[i]["h"])
+        low = float(series[i]["l"])
+        if all(h >= float(series[j]["h"]) for j in range(i - k, i + k + 1)) and \
+           any(h > float(series[j]["h"]) for j in range(i - k, i + k + 1) if j != i):
+            highs.append({"index": i, "price": round(h, 2)})
+        if all(low <= float(series[j]["l"]) for j in range(i - k, i + k + 1)) and \
+           any(low < float(series[j]["l"]) for j in range(i - k, i + k + 1) if j != i):
+            lows.append({"index": i, "price": round(low, 2)})
+    return highs, lows
+
+
+def market_structure(series: list[dict]) -> dict:
+    """Classify market structure from swing pivots: the last two swing highs give
+    HH (higher high) or LH (lower high); the last two swing lows give HL or LL.
+    Structure is bullish on HH+HL, bearish on LH+LL, else ranging. Also reports a
+    current event (breakout / breakdown / pullback / consolidation)."""
+    highs, lows = _pivots(series)
+    labels: list[str] = []
+    hi_lbl = lo_lbl = None
+    if len(highs) >= 2:
+        hi_lbl = "HH" if highs[-1]["price"] > highs[-2]["price"] else "LH"
+        labels.append(hi_lbl)
+    if len(lows) >= 2:
+        lo_lbl = "HL" if lows[-1]["price"] > lows[-2]["price"] else "LL"
+        labels.append(lo_lbl)
+
+    if hi_lbl == "HH" and lo_lbl == "HL":
+        structure = "bullish"
+    elif hi_lbl == "LH" and lo_lbl == "LL":
+        structure = "bearish"
+    else:
+        structure = "ranging"
+
+    price = float(series[-1]["c"])
+    last_high = highs[-1]["price"] if highs else max(float(b["h"]) for b in series)
+    last_low = lows[-1]["price"] if lows else min(float(b["l"]) for b in series)
+
+    # Recent event relative to the latest swing structure.
+    atr14 = atr(series, 14) or (price * 0.01)
+    if price > last_high:
+        event = "breakout"
+    elif price < last_low:
+        event = "breakdown"
+    else:
+        span = last_high - last_low
+        if span > 0 and span < atr14 * 3:
+            event = "consolidation"
+        elif structure == "bullish" and price < (last_high - atr14):
+            event = "pullback"
+        elif structure == "bearish" and price > (last_low + atr14):
+            event = "pullback"
+        else:
+            event = "in-range"
+
+    return {
+        "structure": structure,
+        "labels": labels,                 # e.g. ["HH", "HL"]
+        "swing_high": round(last_high, 2),
+        "swing_low": round(last_low, 2),
+        "event": event,
+        "swing_high_count": len(highs),
+        "swing_low_count": len(lows),
+    }
+
+
+def session_context(daily: list[dict]) -> dict:
+    """Prior-day high/low and opening gap from a daily series (oldest→newest)."""
+    if len(daily) < 2:
+        return {"prev_high": None, "prev_low": None, "prev_close": None, "gap_pct": None}
+    prev, last = daily[-2], daily[-1]
+    prev_close = float(prev["c"])
+    gap = round(((float(last["o"]) - prev_close) / prev_close) * 100, 2) if prev_close else None
+    return {
+        "prev_high": round(float(prev["h"]), 2),
+        "prev_low": round(float(prev["l"]), 2),
+        "prev_close": round(prev_close, 2),
+        "gap_pct": gap,
+    }

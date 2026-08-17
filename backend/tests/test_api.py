@@ -179,6 +179,27 @@ def test_only_real_symbols(client):
     assert any(x["symbol"] == "AAPL" and "Apple" in x["name"] for x in results)
 
 
+def test_coach_stats_and_risk(client):
+    trader = _auth(client, "coach@example.com")
+
+    # Upgraded AI Chart Coach returns structure, confidence, plan, and a verify list.
+    a = client.get("/trading/analyze/AAPL", headers=trader).json()["data"]
+    assert "structure" in a and a["structure"]["structure"] in {"bullish", "bearish", "ranging"}
+    assert isinstance(a["confidence"], int) and 50 <= a["confidence"] <= 95
+    assert "plan" in a and "verify" in a and isinstance(a["verify"], list)
+
+    # A round-trip trade populates the performance dashboard.
+    client.post("/trading/orders", json={"symbol": "AAPL", "side": "buy", "quantity": 5}, headers=trader)
+    client.post("/trading/orders", json={"symbol": "AAPL", "side": "sell", "quantity": 5}, headers=trader)
+    s = client.get("/trading/stats", headers=trader).json()["data"]
+    assert s["trades"] >= 1
+    for k in ("win_rate", "profit_factor", "expectancy", "total_pnl"):
+        assert k in s
+
+    r = client.get("/trading/risk-check", headers=trader).json()["data"]
+    assert "warnings" in r and isinstance(r["warnings"], list)
+
+
 def test_crypto_symbol_with_slash(client):
     """Slash-bearing symbols (crypto pairs) must route via {symbol:path}."""
     trader = _auth(client, "crypto@example.com")

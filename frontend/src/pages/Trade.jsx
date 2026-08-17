@@ -128,7 +128,7 @@ export default function Trade({ notify }) {
       </div>
 
       <div className="tabs">
-        {[["chart", "Chart & Trade"], ["screen", "Screener"], ["journal", "Journal"], ["learn", "Academy"]].map(([k, label]) => (
+        {[["chart", "Chart & Trade"], ["screen", "Screener"], ["journal", "Journal"], ["perf", "Performance"], ["learn", "Academy"]].map(([k, label]) => (
           <button key={k} className={`tab ${tab === k ? "active" : ""}`} onClick={() => setTab(k)}>{label}</button>
         ))}
       </div>
@@ -177,18 +177,41 @@ export default function Trade({ notify }) {
                 </div>
                 {analysis && (
                   <div style={{ marginTop: 10 }}>
-                    <div style={{ display: "flex", gap: 10, alignItems: "center", marginBottom: 8 }}>
+                    <div style={{ display: "flex", gap: 10, alignItems: "center", marginBottom: 8, flexWrap: "wrap" }}>
                       <span className={`bias ${analysis.bias}`}>{analysis.bias}</span>
-                      <span className="muted mono" style={{ fontSize: 13 }}>RSI {analysis.indicators?.rsi14 ?? "—"} · trend {analysis.indicators?.trend ?? "—"}</span>
+                      {analysis.confidence != null && (
+                        <span className="conf"><span className="conf-bar"><span className="conf-fill" style={{ width: `${analysis.confidence}%` }} /></span>{analysis.confidence}% confidence</span>
+                      )}
+                      {analysis.structure && (
+                        <span className="muted mono" style={{ fontSize: 13 }}>
+                          {analysis.structure.structure}{analysis.structure.labels?.length ? ` · ${analysis.structure.labels.join("/")}` : ""} · {analysis.structure.event}
+                        </span>
+                      )}
                     </div>
                     <p>{analysis.summary}</p>
+                    {analysis.plan && analysis.plan.entry != null && (
+                      <div className="plan-row">
+                        <div className="plan-cell"><span className="k">Entry</span><b className="mono">{money(analysis.plan.entry)}</b></div>
+                        <div className="plan-cell down"><span className="k">Stop</span><b className="mono">{money(analysis.plan.stop)}</b></div>
+                        <div className="plan-cell up"><span className="k">Target</span><b className="mono">{money(analysis.plan.target)}</b></div>
+                        <div className="plan-cell"><span className="k">R:R</span><b className="mono">{analysis.plan.reward_risk ?? "—"}</b></div>
+                        <div className="plan-cell"><span className="k">Setup</span><b>{analysis.plan.setup}</b></div>
+                      </div>
+                    )}
                     <div className="stat-grid">
                       <Stat label="Support" value={money(analysis.levels?.support)} tone="up" />
                       <Stat label="Resistance" value={money(analysis.levels?.resistance)} tone="down" />
-                      <Stat label="SMA20" value={money(analysis.indicators?.sma20)} />
-                      <Stat label="SMA50" value={money(analysis.indicators?.sma50)} />
+                      {analysis.session?.prev_high != null && <Stat label="Prev H" value={money(analysis.session.prev_high)} />}
+                      {analysis.session?.prev_low != null && <Stat label="Prev L" value={money(analysis.session.prev_low)} />}
+                      {analysis.session?.gap_pct != null && <Stat label="Gap" value={pct(analysis.session.gap_pct)} tone={analysis.session.gap_pct >= 0 ? "up" : "down"} />}
                       <Stat label="ATR14" value={analysis.indicators?.atr14 ?? "—"} />
                     </div>
+                    {analysis.verify?.length > 0 && (
+                      <div className="verify">
+                        <div className="k" style={{ fontSize: 11, textTransform: "uppercase", color: "var(--muted)" }}>Verify it yourself</div>
+                        <ul>{analysis.verify.map((v, i) => <li key={i}>{v}</li>)}</ul>
+                      </div>
+                    )}
                     <p className="fine">{analysis.disclaimer}</p>
                   </div>
                 )}
@@ -207,8 +230,75 @@ export default function Trade({ notify }) {
 
       {tab === "screen" && <Screener universe={watch.symbols} onPick={pickSymbol} notify={notify} nameMap={nameMap} />}
       {tab === "journal" && <Journal notify={notify} defaultSymbol={symbol} />}
+      {tab === "perf" && <Performance notify={notify} />}
       {tab === "learn" && <Academy />}
     </section>
+  );
+}
+
+function Performance({ notify }) {
+  const [stats, setStats] = useState(null);
+  const [risk, setRisk] = useState(null);
+  const load = useCallback(async () => {
+    try {
+      const [s, r] = await Promise.all([api.tradeStats(), api.tradeRiskCheck()]);
+      setStats(s); setRisk(r);
+    } catch (err) { notify(err.message); }
+  }, [notify]);
+  useEffect(() => { load(); }, [load]);
+  if (!stats) return <LoadingState />;
+
+  const cards = [
+    { k: "Trades", v: stats.trades },
+    { k: "Win rate", v: `${stats.win_rate}%` },
+    { k: "Net P&L", v: money(stats.total_pnl), tone: stats.total_pnl >= 0 ? "up" : "down" },
+    { k: "Profit factor", v: stats.profit_factor ?? "—" },
+    { k: "Expectancy", v: money(stats.expectancy), tone: stats.expectancy >= 0 ? "up" : "down" },
+    { k: "Avg win", v: money(stats.avg_win), tone: "up" },
+    { k: "Avg loss", v: money(stats.avg_loss), tone: "down" },
+    { k: "Avg R:R", v: stats.avg_reward_risk ?? "—" },
+  ];
+
+  return (
+    <div>
+      <div className="card">
+        <h3>AI Risk Monitor</h3>
+        {!risk ? <LoadingState /> : risk.warnings.length === 0 ? (
+          <p className="muted" style={{ margin: 0 }}>✓ No risk flags — your recent activity looks disciplined.</p>
+        ) : (
+          <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+            {risk.warnings.map((w, i) => (
+              <div key={i} className={`risk-flag ${w.level}`}>
+                <b>{w.type.replace(/_/g, " ")}</b> — {w.message}
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
+
+      <div className="card">
+        <h3>Performance</h3>
+        {stats.trades === 0 ? (
+          <p className="muted">No closed trades yet. Take a few paper trades and your metrics will build here.</p>
+        ) : (
+          <>
+            <div className="perf-grid">
+              {cards.map((c) => (
+                <div className="perf-cell" key={c.k}>
+                  <div className="k">{c.k}</div>
+                  <div className="v mono" style={{ color: c.tone === "up" ? "var(--up)" : c.tone === "down" ? "var(--down)" : "var(--text)" }}>{c.v}</div>
+                </div>
+              ))}
+            </div>
+            <div style={{ display: "flex", gap: 16, marginTop: 12, flexWrap: "wrap" }}>
+              {stats.best_symbol?.symbol && <Stat label="Best symbol" value={`${stats.best_symbol.symbol} ${money(stats.best_symbol.pnl)}`} tone="up" />}
+              {stats.worst_symbol?.symbol && <Stat label="Worst symbol" value={`${stats.worst_symbol.symbol} ${money(stats.worst_symbol.pnl)}`} tone="down" />}
+              <button className="btn ghost" style={{ width: "auto", alignSelf: "center" }} onClick={load}>Refresh</button>
+            </div>
+          </>
+        )}
+      </div>
+    </div>
   );
 }
 

@@ -63,28 +63,120 @@ def _rules_bias(ind: dict) -> tuple[str, list[str]]:
     return bias, reasons
 
 
-async def analyze_chart(symbol: str, series: list[dict], timeframe: str) -> dict:
-    """Return {symbol, timeframe, indicators, bias, summary, levels, disclaimer}."""
-    ind = ta.indicators(series)
-    bias, reasons = _rules_bias(ind)
-    levels = {"support": ind.get("support"), "resistance": ind.get("resistance")}
+def _confidence(ind: dict, structure: dict) -> tuple[str, int, list[str]]:
+    """Directional score → (bias, confidence 50-95, aligned-signal reasons)."""
+    score = 0
+    reasons: list[str] = []
+    if ind.get("trend") == "up":
+        score += 1; reasons.append("Uptrend (20>50 SMA)")
+    elif ind.get("trend") == "down":
+        score -= 1; reasons.append("Downtrend (20<50 SMA)")
+    if structure.get("structure") == "bullish":
+        score += 1; reasons.append(f"Bullish structure ({'/'.join(structure.get('labels', [])) or 'HH/HL'})")
+    elif structure.get("structure") == "bearish":
+        score -= 1; reasons.append(f"Bearish structure ({'/'.join(structure.get('labels', [])) or 'LH/LL'})")
+    rsi = ind.get("rsi14")
+    if rsi is not None:
+        if rsi <= 30:
+            score += 1; reasons.append(f"RSI {rsi} oversold")
+        elif rsi >= 70:
+            score -= 1; reasons.append(f"RSI {rsi} overbought")
+    macd = ind.get("macd")
+    if macd:
+        if macd["hist"] > 0:
+            score += 1; reasons.append("MACD momentum up")
+        else:
+            score -= 1; reasons.append("MACD momentum down")
+    price, sma200 = ind.get("price"), ind.get("sma200")
+    if price and sma200:
+        if price > sma200:
+            score += 1; reasons.append("Above the 200-day")
+        else:
+            score -= 1; reasons.append("Below the 200-day")
+    if structure.get("event") == "breakout":
+        score += 1; reasons.append("Breakout over swing high")
+    elif structure.get("event") == "breakdown":
+        score -= 1; reasons.append("Breakdown under swing low")
 
-    summary = " ".join(reasons) or "Not enough data for a read."
+    bias = "bullish" if score > 0 else "bearish" if score < 0 else "neutral"
+    confidence = min(95, 50 + round(abs(score) / 6 * 45))
+    return bias, confidence, reasons
+
+
+def _trade_plan(ind: dict, structure: dict, bias: str) -> dict:
+    """Educational entry/stop/target zones + reward:risk. NOT a signal."""
+    price = ind.get("price")
+    atr = ind.get("atr14") or (price * 0.01 if price else 1)
+    support = ind.get("support")
+    resistance = ind.get("resistance")
+    if not price:
+        return {"setup": "insufficient data"}
+    if bias == "bullish":
+        entry = price
+        stop = round(min(support or price, structure.get("swing_low", price)) - 0.25 * atr, 2)
+        target = round(max(resistance or price, entry + 2 * (entry - stop)), 2)
+        direction = "long"
+    elif bias == "bearish":
+        entry = price
+        stop = round(max(resistance or price, structure.get("swing_high", price)) + 0.25 * atr, 2)
+        target = round(min(support or price, entry - 2 * (stop - entry)), 2)
+        direction = "short"
+    else:
+        return {"setup": "no edge — wait for a cleaner structure", "direction": "flat",
+                "entry": None, "stop": None, "target": None, "reward_risk": None}
+    risk = abs(entry - stop)
+    reward = abs(target - entry)
+    rr = round(reward / risk, 2) if risk else None
+    setup = structure.get("event", "in-range")
+    return {"setup": setup, "direction": direction, "entry": round(entry, 2),
+            "stop": stop, "target": target, "reward_risk": rr}
+
+
+def _verify_checklist(ind: dict, structure: dict, bias: str) -> list[str]:
+    """'How to verify it yourself' — this is a learning tool, not a black box."""
+    items = [
+        "Confirm the same trend on a higher timeframe before acting.",
+        "Mark the support/resistance yourself and check price actually reacted there.",
+    ]
+    if structure.get("event") in ("breakout", "breakdown"):
+        items.append("On a break, require volume to expand — a low-volume break often fails.")
+    if bias != "neutral":
+        items.append("Place your stop beyond the swing "
+                     + ("low" if bias == "bullish" else "high") + ", not at a round number.")
+    items.append("Size the position so the stop loss is ≤ your max risk per trade.")
+    return items
+
+
+async def analyze_chart(symbol: str, series: list[dict], timeframe: str, daily: list[dict] | None = None) -> dict:
+    """AI Chart Coach: structure, key levels, an educational entry/stop/target
+    plan, confidence, and a verify-it-yourself checklist. Framed as analysis for
+    learning — never a guaranteed signal."""
+    ind = ta.indicators(series)
+    structure = ta.market_structure(series)
+    session = ta.session_context(daily) if daily else {"prev_high": None, "prev_low": None, "prev_close": None, "gap_pct": None}
+    levels = {"support": ind.get("support"), "resistance": ind.get("resistance")}
+    bias, confidence, aligned = _confidence(ind, structure)
+    plan = _trade_plan(ind, structure, bias)
+    verify = _verify_checklist(ind, structure, bias)
+
+    summary = (
+        f"Market structure is {structure['structure']} "
+        f"({'/'.join(structure.get('labels', [])) or 'forming'}), event: {structure['event']}. "
+        f"Bias {bias} at ~{confidence}% confidence. "
+        + (" ".join(aligned) + "." if aligned else "")
+    )
     try:
         prompt = (
-            f"You are a trading analyst. Symbol {symbol} on the {timeframe} timeframe.\n"
-            f"Facts (already computed, treat as ground truth): {ind}\n"
-            f"Rules-based bias: {bias}. Key levels: {levels}.\n\n"
-            "Write a concise, neutral read for a trader in 3-4 sentences: the setup, "
-            "the trend/momentum picture, the key level to watch, and one risk. "
-            "Do NOT give buy/sell commands or price predictions. Educational tone."
+            f"You are a trading COACH teaching a student. Symbol {symbol}, {timeframe} timeframe.\n"
+            f"Computed facts (ground truth): indicators={ind}; structure={structure}; "
+            f"session={session}; bias={bias}; confidence={confidence}; plan={plan}.\n\n"
+            "In 3-5 sentences, explain what the chart is showing (trend, market structure "
+            "with HH/HL/LH/LL, key levels, momentum) and the potential setup, in teaching "
+            "language. Frame the entry/stop/target as an EXAMPLE of how one might structure "
+            "risk, not a recommendation. End by reminding the student to verify it themselves. "
+            "No guarantees, no 'you should buy/sell'."
         )
-        text = await generate(
-            prompt,
-            system="You are a careful trading analyst. Never give financial advice or guarantees.",
-            max_tokens=320,
-            temperature=0.4,
-        )
+        text = await generate(prompt, system="You are a supportive trading coach for a learner. Educational only; never financial advice.", max_tokens=380, temperature=0.4)
         if text.strip():
             summary = text.strip()
     except Exception:  # noqa: BLE001 - keep the rules-based summary
@@ -94,10 +186,15 @@ async def analyze_chart(symbol: str, series: list[dict], timeframe: str) -> dict
         "symbol": symbol,
         "timeframe": timeframe,
         "indicators": ind,
+        "structure": structure,
+        "session": session,
         "bias": bias,
-        "reasons": reasons,
+        "confidence": confidence,
+        "reasons": aligned,
         "levels": levels,
+        "plan": plan,
         "summary": summary,
+        "verify": verify,
         "disclaimer": DISCLAIMER,
     }
 

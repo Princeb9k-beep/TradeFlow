@@ -79,4 +79,6 @@ export const api = {
   tradeReviewJournal: (id) => request(`/trading/journal/${id}/review`, { method: "POST" }),
   tradeDeleteJournal: (id) => request(`/trading/journal/${id}`, { method: "DELETE" }),
   tradeAcademy: () => request("/trading/academy"),
+  tradeStats: () => request("/trading/stats"),
+  tradeRiskCheck: () => request("/trading/risk-check"),
 };

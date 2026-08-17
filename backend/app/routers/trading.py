@@ -13,6 +13,8 @@ against virtual cash. Nothing here is financial advice.
 
 from __future__ import annotations
 
+from datetime import datetime, timedelta, timezone
+
 from fastapi import APIRouter, Depends, Query
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -284,7 +286,8 @@ async def analyze(
     if bad:
         return bad
     series = await get_candles(symbol, timeframe, 200)
-    result = await trade_ai.analyze_chart(symbol.upper(), series, timeframe)
+    daily = series if timeframe == "1d" else await get_candles(symbol, "1d", 60)
+    result = await trade_ai.analyze_chart(symbol.upper(), series, timeframe, daily=daily)
     return ok(data=result, message="Analysis complete")
 
 
@@ -380,6 +383,119 @@ async def delete_journal(
         await session.delete(entry)
         await session.commit()
     return ok(data={"id": entry_id}, message="Deleted")
+
+
+# --- Performance dashboard ------------------------------------------------
+@router.get("/stats")
+async def stats(
+    user: User = Depends(get_current_user), session: AsyncSession = Depends(get_session)
+) -> object:
+    # Realized trades = closing orders that carry realized P&L.
+    result = await session.execute(
+        select(TradingOrder).where(
+            TradingOrder.user_id == user.id, TradingOrder.realized_pnl.is_not(None)
+        )
+    )
+    closes = list(result.scalars().all())
+    pnls = [float(o.realized_pnl) for o in closes]
+    wins = [p for p in pnls if p > 0]
+    losses = [p for p in pnls if p < 0]
+    n = len(pnls)
+    gross_win = round(sum(wins), 2)
+    gross_loss = round(sum(losses), 2)
+    by_symbol: dict[str, float] = {}
+    for o in closes:
+        by_symbol[o.symbol] = round(by_symbol.get(o.symbol, 0.0) + float(o.realized_pnl), 2)
+
+    # Realized reward:risk from journalled trades that have entry/stop/exit.
+    jres = await session.execute(
+        select(TradeJournalEntry).where(TradeJournalEntry.user_id == user.id)
+    )
+    rrs = []
+    for e in jres.scalars().all():
+        if e.entry_price and e.stop_price and e.exit_price and e.entry_price != e.stop_price:
+            rrs.append(abs(e.exit_price - e.entry_price) / abs(e.entry_price - e.stop_price))
+
+    best = max(by_symbol.items(), key=lambda kv: kv[1], default=(None, None))
+    worst = min(by_symbol.items(), key=lambda kv: kv[1], default=(None, None))
+    data = {
+        "trades": n,
+        "wins": len(wins),
+        "losses": len(losses),
+        "win_rate": round(len(wins) / n * 100, 1) if n else 0.0,
+        "total_pnl": round(sum(pnls), 2),
+        "avg_win": round(sum(wins) / len(wins), 2) if wins else 0.0,
+        "avg_loss": round(sum(losses) / len(losses), 2) if losses else 0.0,
+        "profit_factor": round(gross_win / abs(gross_loss), 2) if gross_loss else (None if not wins else 999.0),
+        "expectancy": round(sum(pnls) / n, 2) if n else 0.0,
+        "avg_reward_risk": round(sum(rrs) / len(rrs), 2) if rrs else None,
+        "best_symbol": {"symbol": best[0], "pnl": best[1]} if best[0] else None,
+        "worst_symbol": {"symbol": worst[0], "pnl": worst[1]} if worst[0] else None,
+    }
+    return ok(data=data, message="Performance")
+
+
+# --- AI risk monitor ------------------------------------------------------
+@router.get("/risk-check")
+async def risk_check(
+    user: User = Depends(get_current_user), session: AsyncSession = Depends(get_session)
+) -> object:
+    """Rules-based guardrails over recent activity: overtrading, revenge trading,
+    position concentration, and poor reward:risk. Educational nudges, not advice."""
+    result = await session.execute(
+        select(TradingOrder).where(TradingOrder.user_id == user.id)
+        .order_by(TradingOrder.created_at.desc()).limit(40)
+    )
+    orders = list(result.scalars().all())  # newest first
+    warnings: list[dict] = []
+    now = datetime.now(timezone.utc)
+
+    def _aware(dt):
+        # SQLite hands back naive datetimes; assume UTC so tz math is safe.
+        return dt if dt is None or dt.tzinfo else dt.replace(tzinfo=timezone.utc)
+
+    recent = [o for o in orders if o.created_at and (now - _aware(o.created_at)) <= timedelta(minutes=60)]
+    if len(recent) >= 6:
+        warnings.append({"type": "overtrading", "level": "warn",
+                         "message": f"You've placed {len(recent)} orders in the last hour — that pace often signals overtrading."})
+
+    # Revenge trading: a new order within 10 min after a losing close.
+    chrono = sorted([o for o in orders if o.created_at], key=lambda o: _aware(o.created_at))
+    revenge = 0
+    for i in range(1, len(chrono)):
+        prev = chrono[i - 1]
+        if prev.realized_pnl is not None and prev.realized_pnl < 0 and \
+           (_aware(chrono[i].created_at) - _aware(prev.created_at)) <= timedelta(minutes=10):
+            revenge += 1
+    if revenge >= 2:
+        warnings.append({"type": "revenge_trading", "level": "warn",
+                         "message": f"{revenge} of your recent entries came right after a loss — watch for revenge trading."})
+
+    # Position concentration vs equity.
+    acct = await _account(session, user)
+    await session.commit()
+    snap = await _account_snapshot(session, acct)
+    eq = snap["equity"] or 1
+    for p in snap["positions"]:
+        pctv = p["market_value"] / eq * 100
+        if pctv >= 30:
+            warnings.append({"type": "oversizing", "level": "warn",
+                             "message": f"{p['symbol']} is {pctv:.0f}% of your equity — concentrated risk in one name."})
+
+    # Poor reward:risk from journalled trades.
+    jres = await session.execute(
+        select(TradeJournalEntry).where(TradeJournalEntry.user_id == user.id)
+        .order_by(TradeJournalEntry.created_at.desc()).limit(10)
+    )
+    for e in jres.scalars().all():
+        if e.entry_price and e.stop_price and e.exit_price and e.entry_price != e.stop_price:
+            rr = abs(e.exit_price - e.entry_price) / abs(e.entry_price - e.stop_price)
+            if rr < 1:
+                warnings.append({"type": "poor_rr", "level": "info",
+                                 "message": f"Your {e.symbol} trade risked more than it aimed to make (R:R {rr:.2f})."})
+                break
+
+    return ok(data={"ok": not warnings, "warnings": warnings}, message="Risk check")
 
 
 # --- Academy --------------------------------------------------------------

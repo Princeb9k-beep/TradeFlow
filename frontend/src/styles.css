@@ -148,6 +148,24 @@ svg.chart { display: block; width: 100%; height: auto; }
 .bias { font-size: 12px; font-weight: 750; text-transform: uppercase; padding: 3px 12px; border-radius: 999px; color: #fff; }
 .bias.bullish { background: var(--up); } .bias.bearish { background: var(--down); } .bias.neutral { background: var(--muted); }
 .stat-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(84px, 1fr)); gap: 12px 16px; margin: 12px 0; }
+.conf { display: inline-flex; align-items: center; gap: 6px; font-size: 12px; color: var(--muted); }
+.conf-bar { width: 60px; height: 6px; border-radius: 3px; background: var(--surface-2); overflow: hidden; display: inline-block; }
+.conf-fill { display: block; height: 100%; background: var(--accent); }
+.plan-row { display: grid; grid-template-columns: repeat(auto-fit, minmax(72px, 1fr)); gap: 8px; margin: 10px 0; padding: 10px; background: var(--surface-2); border: 1px solid var(--border); border-radius: 10px; }
+.plan-cell { display: flex; flex-direction: column; gap: 2px; }
+.plan-cell .k { font-size: 10px; text-transform: uppercase; letter-spacing: 0.04em; color: var(--muted); }
+.plan-cell.up b { color: var(--up); } .plan-cell.down b { color: var(--down); }
+.verify { margin-top: 8px; }
+.verify ul { margin: 4px 0 0; padding-left: 18px; }
+.verify li { font-size: 13px; color: var(--muted); margin: 3px 0; }
+.risk-flag { border-left: 3px solid var(--accent); background: var(--surface-2); border-radius: 8px; padding: 8px 12px; font-size: 13.5px; }
+.risk-flag.warn { border-left-color: #eab308; }
+.risk-flag.info { border-left-color: var(--accent); }
+.risk-flag b { text-transform: capitalize; }
+.perf-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(110px, 1fr)); gap: 12px; }
+.perf-cell { background: var(--surface-2); border: 1px solid var(--border); border-radius: 10px; padding: 10px 12px; }
+.perf-cell .k { font-size: 11px; text-transform: uppercase; letter-spacing: 0.04em; color: var(--muted); }
+.perf-cell .v { font-size: 20px; font-weight: 700; margin-top: 2px; }
 .stat .k { font-size: 11px; text-transform: uppercase; color: var(--muted); }
 .stat .v { font-weight: 700; }
 .fine { font-size: 11.5px; color: var(--muted); margin-top: 8px; }
