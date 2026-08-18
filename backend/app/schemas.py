@@ -54,6 +54,11 @@ class JournalRequest(BaseModel):
     tags: list[str] = Field(default_factory=list)
 
 
+class ChallengeAnswerRequest(BaseModel):
+    token: str
+    choice: str = Field(examples=["buy", "sell", "wait"])
+
+
 class AccountSettingsRequest(BaseModel):
     risk_per_trade_pct: float | None = Field(default=None, gt=0, le=100)
     max_daily_loss_pct: float | None = Field(default=None, gt=0, le=100)

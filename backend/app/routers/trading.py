@@ -13,6 +13,7 @@ against virtual cash. Nothing here is financial advice.
 
 from __future__ import annotations
 
+import random
 from datetime import datetime, timedelta, timezone
 
 from fastapi import APIRouter, Depends, Query
@@ -29,13 +30,14 @@ from ..responses import error, ok
 from .. import symbols
 from ..schemas import (
     AccountSettingsRequest,
+    ChallengeAnswerRequest,
     JournalRequest,
     OrderRequest,
     PositionSizeRequest,
     ScreenRequest,
     WatchlistRequest,
 )
-from ..skills import ta, trade_ai
+from ..skills import challenge, ta, trade_ai
 from ..skills.trading_curriculum import CURRICULUM
 
 router = APIRouter(prefix="/trading", tags=["trading"])
@@ -496,6 +498,50 @@ async def risk_check(
                 break
 
     return ok(data={"ok": not warnings, "warnings": warnings}, message="Risk check")
+
+
+# --- Market Challenge (historical replay game) ---------------------------
+@router.get("/challenge/new")
+async def challenge_new(
+    symbol: str = Query(default=""),
+    timeframe: str = Query(default="1d"),
+    _: User = Depends(get_current_user),
+) -> object:
+    if timeframe not in TIMEFRAMES:
+        timeframe = "1d"
+    sym = symbol.strip().upper() if symbol.strip() else random.choice([s["symbol"] for s in symbols.all_symbols()])
+    bad = _unknown_symbol(sym)
+    if bad:
+        return bad
+    candles = await get_candles(sym, timeframe, 250)
+    game = challenge.build_challenge(sym, timeframe, candles)
+    if game is None:
+        return error("Not enough history to build a challenge for that symbol.", code="no_history")
+    # Hide the company name so it's a blind read (name revealed on answer).
+    return ok(
+        data={
+            "symbol": game["symbol"], "timeframe": game["timeframe"],
+            "setup": game["setup"], "entry": game["entry"],
+            "horizon": game["horizon"], "token": game["token"],
+        },
+        message="New challenge",
+    )
+
+
+@router.post("/challenge/answer")
+async def challenge_answer(
+    payload: ChallengeAnswerRequest, _: User = Depends(get_current_user)
+) -> object:
+    data = challenge.verify_token(payload.token)
+    if data is None:
+        return error("Invalid or expired challenge. Start a new one.", code="bad_token")
+    candles = await get_candles(data["symbol"], data["timeframe"], 250)
+    result = challenge.score_challenge(data, payload.choice, candles)
+    if result is None:
+        return error("Couldn't score that challenge — start a new one.", code="expired")
+    result["symbol"] = data["symbol"]
+    result["name"] = symbols.name_for(data["symbol"])
+    return ok(data=result, message="Challenge scored")
 
 
 # --- Academy --------------------------------------------------------------

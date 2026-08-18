@@ -81,4 +81,8 @@ export const api = {
   tradeAcademy: () => request("/trading/academy"),
   tradeStats: () => request("/trading/stats"),
   tradeRiskCheck: () => request("/trading/risk-check"),
+  challengeNew: (symbol = "", timeframe = "1d") =>
+    request(`/trading/challenge/new?symbol=${encodeURIComponent(symbol)}&timeframe=${timeframe}`),
+  challengeAnswer: (token, choice) =>
+    request("/trading/challenge/answer", { method: "POST", body: { token, choice } }),
 };

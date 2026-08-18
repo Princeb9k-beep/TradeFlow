@@ -200,6 +200,28 @@ def test_coach_stats_and_risk(client):
     assert "warnings" in r and isinstance(r["warnings"], list)
 
 
+def test_market_challenge(client):
+    trader = _auth(client, "game@example.com")
+    r = client.get("/trading/challenge/new?symbol=AAPL&timeframe=1d", headers=trader)
+    assert r.status_code == 200
+    g = r.json()["data"]
+    assert g["token"] and len(g["setup"]) >= 30 and g["entry"] > 0
+    # future must NOT be leaked in the setup payload
+    assert "future" not in g
+
+    for choice in ("buy", "sell", "wait"):
+        a = client.post("/trading/challenge/answer", json={"token": g["token"], "choice": choice}, headers=trader)
+        assert a.status_code == 200
+        res = a.json()["data"]
+        assert res["tier"] in {"Bronze", "Silver", "Gold", "Elite"}
+        assert 0 <= res["score"] <= 100
+        assert isinstance(res["future"], list) and len(res["future"]) >= 1
+        assert "explanation" in res
+
+    bad = client.post("/trading/challenge/answer", json={"token": "not-a-token", "choice": "buy"}, headers=trader)
+    assert bad.status_code == 400
+
+
 def test_crypto_symbol_with_slash(client):
     """Slash-bearing symbols (crypto pairs) must route via {symbol:path}."""
     trader = _auth(client, "crypto@example.com")

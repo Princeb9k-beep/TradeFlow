@@ -101,7 +101,7 @@ const OVERLAYS = [
 ];
 const FIB = [0, 0.236, 0.382, 0.5, 0.618, 0.786, 1];
 
-export default function ProChart({ candles, levels, symbol, timeframe, themeTick }) {
+export default function ProChart({ candles, levels, symbol, timeframe, themeTick, entryLine }) {
   const wrapRef = useRef(null);
   const rsiHostRef = useRef(null);
   const macdHostRef = useRef(null);
@@ -296,7 +296,8 @@ export default function ProChart({ candles, levels, symbol, timeframe, themeTick
     priceLinesRef.current.forEach((pl) => s.removePriceLine(pl)); priceLinesRef.current = [];
     if (levels?.support != null) priceLinesRef.current.push(s.createPriceLine({ price: levels.support, color: cssVar("--up", "#26a69a"), lineWidth: 1, lineStyle: LineStyle.Dashed, axisLabelVisible: true, title: "support" }));
     if (levels?.resistance != null) priceLinesRef.current.push(s.createPriceLine({ price: levels.resistance, color: cssVar("--down", "#ef5350"), lineWidth: 1, lineStyle: LineStyle.Dashed, axisLabelVisible: true, title: "resistance" }));
-  }, [levels]);
+    if (entryLine != null) priceLinesRef.current.push(s.createPriceLine({ price: entryLine, color: cssVar("--accent", "#5b82ff"), lineWidth: 1, lineStyle: LineStyle.Dashed, axisLabelVisible: true, title: "entry" }));
+  }, [levels, entryLine]);
 
   // --- theme -------------------------------------------------------------
   useEffect(() => {

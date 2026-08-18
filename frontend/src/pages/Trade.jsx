@@ -128,7 +128,7 @@ export default function Trade({ notify }) {
       </div>
 
       <div className="tabs">
-        {[["chart", "Chart & Trade"], ["screen", "Screener"], ["journal", "Journal"], ["perf", "Performance"], ["learn", "Academy"]].map(([k, label]) => (
+        {[["chart", "Chart & Trade"], ["screen", "Screener"], ["challenge", "Challenge"], ["journal", "Journal"], ["perf", "Performance"], ["learn", "Academy"]].map(([k, label]) => (
           <button key={k} className={`tab ${tab === k ? "active" : ""}`} onClick={() => setTab(k)}>{label}</button>
         ))}
       </div>
@@ -230,9 +230,95 @@ export default function Trade({ notify }) {
 
       {tab === "screen" && <Screener universe={watch.symbols} onPick={pickSymbol} notify={notify} nameMap={nameMap} />}
       {tab === "journal" && <Journal notify={notify} defaultSymbol={symbol} />}
+      {tab === "challenge" && <MarketChallenge notify={notify} themeTick={themeTick} />}
       {tab === "perf" && <Performance notify={notify} />}
       {tab === "learn" && <Academy />}
     </section>
+  );
+}
+
+function MarketChallenge({ notify, themeTick }) {
+  const [game, setGame] = useState(null);
+  const [result, setResult] = useState(null);
+  const [busy, setBusy] = useState(false);
+  const [sess, setSess] = useState({ played: 0, correct: 0, score: 0, streak: 0, best: 0 });
+
+  const newGame = useCallback(async () => {
+    setBusy(true); setResult(null);
+    try { setGame(await api.challengeNew()); }
+    catch (err) { notify(err.message); } finally { setBusy(false); }
+  }, [notify]);
+  useEffect(() => { newGame(); }, [newGame]);
+
+  async function answer(choice) {
+    if (!game || busy) return;
+    setBusy(true);
+    try {
+      const r = await api.challengeAnswer(game.token, choice);
+      setResult(r);
+      setSess((s) => ({
+        played: s.played + 1,
+        correct: s.correct + (r.correct ? 1 : 0),
+        score: s.score + r.score,
+        streak: r.correct ? s.streak + 1 : 0,
+        best: Math.max(s.best, r.correct ? s.streak + 1 : 0),
+      }));
+    } catch (err) { notify(err.message); } finally { setBusy(false); }
+  }
+
+  const candles = game ? (result ? game.setup.concat(result.future) : game.setup) : [];
+  const chartKey = game ? `chal-${game.token.slice(-12)}` : "chal";
+  const avg = sess.played ? Math.round(sess.score / sess.played) : 0;
+
+  return (
+    <div>
+      <div className="card">
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline", flexWrap: "wrap", gap: 10 }}>
+          <h3 style={{ margin: 0 }}>Market Challenge</h3>
+          <div className="chal-stats mono">
+            <span>Played <b>{sess.played}</b></span>
+            <span>Correct <b>{sess.played ? Math.round(sess.correct / sess.played * 100) : 0}%</b></span>
+            <span>Avg score <b>{avg}</b></span>
+            <span>Streak <b className="up">{sess.streak}🔥</b></span>
+          </div>
+        </div>
+        <p className="muted" style={{ fontSize: 14, marginBottom: 0 }}>
+          Read the chart — the next {game?.horizon ?? 10} candles are hidden. Would you <b>buy</b>, <b>sell</b>, or <b>wait</b>? The blue line is your entry.
+        </p>
+      </div>
+
+      <div className="chart-shell" style={{ marginBottom: 12 }}>
+        {candles.length ? (
+          <ProChart candles={candles} symbol={chartKey} timeframe={game?.timeframe} entryLine={game?.entry} themeTick={themeTick} />
+        ) : <LoadingState label="Dealing a chart…" />}
+      </div>
+
+      {!result ? (
+        <div className="chal-actions">
+          <button className="chal-btn buy" disabled={busy} onClick={() => answer("buy")}>▲ BUY</button>
+          <button className="chal-btn wait" disabled={busy} onClick={() => answer("wait")}>⏸ WAIT</button>
+          <button className="chal-btn sell" disabled={busy} onClick={() => answer("sell")}>▼ SELL</button>
+        </div>
+      ) : (
+        <div className="card">
+          <div style={{ display: "flex", alignItems: "center", gap: 12, flexWrap: "wrap" }}>
+            <span className={`tier-badge tier-${result.tier.toLowerCase()}`}>{result.tier}</span>
+            <span style={{ fontSize: 22, fontWeight: 750 }}>{result.score}<span className="muted" style={{ fontSize: 14 }}>/100</span></span>
+            <span className={result.correct ? "up" : "down"} style={{ fontWeight: 700 }}>{result.correct ? "✓ Correct" : "✗ Off this time"}</span>
+            <span className="muted mono" style={{ marginLeft: "auto" }}>{result.name} ({result.symbol})</span>
+          </div>
+          <div className="stat-grid" style={{ marginTop: 10 }}>
+            <Stat label="Move" value={pct(result.move_pct)} tone={result.move_pct >= 0 ? "up" : "down"} />
+            <Stat label="Best case" value={pct(result.mfe_pct)} tone="up" />
+            <Stat label="Worst case" value={pct(result.mae_pct)} tone="down" />
+            <Stat label="Entry" value={money(result.entry)} />
+            <Stat label="Close" value={money(result.final)} />
+          </div>
+          <p style={{ marginTop: 8 }}>{result.explanation}</p>
+          <button className="btn" onClick={newGame} disabled={busy}>Next challenge →</button>
+        </div>
+      )}
+    </div>
   );
 }
 
