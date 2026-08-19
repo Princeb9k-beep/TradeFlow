@@ -56,6 +56,10 @@ class Settings(BaseSettings):
     # connected. Real money stays behind this gate + disclaimers.
     live_trading_enabled: bool = False
     paper_starting_cash: float = 100_000.0
+    # Simulated execution realism: slippage (basis points, worse for the taker)
+    # and a flat commission per fill (0 = commission-free, like most US brokers).
+    slippage_bps: float = 1.0
+    commission_per_order: float = 0.0
 
     model_config = SettingsConfigDict(
         env_file=".env", env_file_encoding="utf-8", extra="ignore"

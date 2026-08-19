@@ -135,6 +135,35 @@ class Watchlist(Base):
     )
 
 
+class PendingOrder(Base):
+    """A resting order (limit/stop entry, or a take-profit/stop-loss exit) that
+    fills when price crosses its trigger. Bracket exits share a bracket_id so
+    filling one cancels the other (OCO)."""
+
+    __tablename__ = "pending_orders"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    account_id: Mapped[int] = mapped_column(
+        ForeignKey("trading_accounts.id", ondelete="CASCADE"), index=True
+    )
+    user_id: Mapped[int] = mapped_column(
+        ForeignKey("users.id", ondelete="CASCADE"), index=True
+    )
+    symbol: Mapped[str] = mapped_column(String(20), index=True)
+    side: Mapped[str] = mapped_column(String(4))          # buy | sell
+    kind: Mapped[str] = mapped_column(String(6))          # limit | stop
+    role: Mapped[str] = mapped_column(String(6), default="entry")  # entry | tp | sl
+    quantity: Mapped[float] = mapped_column(Float)
+    trigger_price: Mapped[float] = mapped_column(Float)
+    bracket_id: Mapped[str | None] = mapped_column(String(24), nullable=True, index=True)
+    # open | filled | cancelled
+    status: Mapped[str] = mapped_column(String(10), default="open", index=True)
+    note: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), index=True
+    )
+
+
 class TradeJournalEntry(Base):
     """A trader's journal note on a trade — the data the AI coach reviews and the
     moat signal that lets coaching improve from a user's own history."""

@@ -23,6 +23,11 @@ class OrderRequest(BaseModel):
     symbol: str = Field(min_length=1, max_length=20, examples=["AAPL"])
     side: str = Field(examples=["buy", "sell"])
     quantity: float = Field(gt=0, le=1_000_000)
+    type: str = Field(default="market", examples=["market", "limit", "stop"])
+    limit_price: float | None = Field(default=None, gt=0)   # for limit orders
+    stop_price: float | None = Field(default=None, gt=0)    # trigger for stop orders
+    take_profit: float | None = Field(default=None, gt=0)   # bracket TP (on a buy)
+    stop_loss: float | None = Field(default=None, gt=0)     # bracket SL (on a buy)
     note: str | None = Field(default=None, max_length=255)
 
 

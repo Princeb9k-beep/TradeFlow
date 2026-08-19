@@ -68,9 +68,11 @@ export const api = {
   tradeRemoveWatch: (s) => request(`/trading/watchlist/${sym(s)}`, { method: "DELETE" }),
   tradeAccount: () => request("/trading/account"),
   tradeAccountSettings: (data) => request("/trading/account/settings", { method: "POST", body: data }),
-  tradeOrder: (symbol, side, quantity, note) =>
-    request("/trading/orders", { method: "POST", body: { symbol, side, quantity, note } }),
+  tradeOrder: (symbol, side, quantity, opts = {}) =>
+    request("/trading/orders", { method: "POST", body: { symbol, side, quantity, ...opts } }),
   tradeOrders: () => request("/trading/orders"),
+  tradeOrdersOpen: () => request("/trading/orders/open"),
+  tradeCancelOrder: (id) => request(`/trading/orders/open/${id}`, { method: "DELETE" }),
   tradeAnalyze: (s, tf = "1d") => request(`/trading/analyze/${sym(s)}?timeframe=${tf}`),
   tradeScreen: (query, symbols = []) => request("/trading/screen", { method: "POST", body: { query, symbols } }),
   tradePositionSize: (data) => request("/trading/position-size", { method: "POST", body: data }),

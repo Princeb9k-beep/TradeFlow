@@ -20,7 +20,16 @@ from fastapi import APIRouter, Depends, Query
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from ..brokers import OrderError, get_or_create_account, positions_for, select_broker
+from ..brokers import (
+    OrderError,
+    create_pending,
+    get_or_create_account,
+    new_bracket_id,
+    positions_for,
+    process_pending,
+    select_broker,
+)
+from ..models import PendingOrder
 from ..config import get_settings
 from ..database import get_session
 from ..deps import get_current_user
@@ -193,8 +202,15 @@ async def account(
     user: User = Depends(get_current_user), session: AsyncSession = Depends(get_session)
 ) -> object:
     acct = await _account(session, user)
+    await process_pending(session, acct)  # poll-driven fills for resting orders
     await session.commit()
-    return ok(data=await _account_snapshot(session, acct), message="Account")
+    snap = await _account_snapshot(session, acct)
+    # how many resting orders are still open (surfaced in the UI)
+    result = await session.execute(
+        select(PendingOrder).where(PendingOrder.account_id == acct.id, PendingOrder.status == "open")
+    )
+    snap["open_orders"] = len(list(result.scalars().all()))
+    return ok(data=snap, message="Account")
 
 
 @router.post("/account/settings")
@@ -217,6 +233,22 @@ async def account_settings(
     return ok(data=await _account_snapshot(session, acct), message="Account updated")
 
 
+async def _attach_bracket(session, acct, symbol, quantity, take_profit, stop_loss):
+    """Attach OCO exits to a filled long entry: a take-profit limit-sell and a
+    stop-loss stop-sell that cancel each other when one fills."""
+    if not (take_profit or stop_loss):
+        return
+    bid = new_bracket_id()
+    if take_profit:
+        await create_pending(session, acct, symbol=symbol, side="sell", kind="limit",
+                             quantity=quantity, trigger_price=take_profit, role="tp",
+                             bracket_id=bid, note="take-profit")
+    if stop_loss:
+        await create_pending(session, acct, symbol=symbol, side="sell", kind="stop",
+                             quantity=quantity, trigger_price=stop_loss, role="sl",
+                             bracket_id=bid, note="stop-loss")
+
+
 @router.post("/orders")
 async def place_order(
     payload: OrderRequest,
@@ -226,12 +258,42 @@ async def place_order(
     bad = _unknown_symbol(payload.symbol)
     if bad:
         return bad
+    otype = (payload.type or "market").lower()
+    if otype not in {"market", "limit", "stop"}:
+        return error("Order type must be 'market', 'limit', or 'stop'.", code="bad_type")
     acct = await _account(session, user)
+    symbol = payload.symbol.strip().upper()
+
+    # --- resting entry orders (limit / stop) ---
+    if otype in {"limit", "stop"}:
+        trigger = payload.limit_price if otype == "limit" else payload.stop_price
+        if not trigger:
+            return error(f"A {otype} order needs a {'limit' if otype == 'limit' else 'stop'} price.", code="missing_price")
+        try:
+            po = await create_pending(session, acct, symbol=symbol, side=payload.side,
+                                      kind=otype, quantity=payload.quantity,
+                                      trigger_price=trigger, note=payload.note)
+            # A buy bracket's exits arm once the entry fills; store them alongside.
+            if payload.side.lower() == "buy":
+                await _attach_bracket(session, acct, symbol, payload.quantity, payload.take_profit, payload.stop_loss)
+            filled = await process_pending(session, acct)  # fill immediately if marketable
+        except OrderError as exc:
+            await session.rollback()
+            return error(str(exc), code="order_rejected")
+        await session.commit()
+        snap = await _account_snapshot(session, acct)
+        was_filled = any(f.id == po.id for f in filled)
+        return ok(
+            data={"pending": _pending_dict(po), "filled": was_filled, "account": snap},
+            message=("Filled" if was_filled else f"{otype.title()} order resting") + f" — {payload.side} {payload.quantity:g} {symbol}",
+        )
+
+    # --- market order ---
     broker = select_broker(get_settings(), acct.mode)
     try:
-        fill = await broker.place_order(
-            session, acct, payload.symbol, payload.side, payload.quantity, payload.note
-        )
+        fill = await broker.place_order(session, acct, symbol, payload.side, payload.quantity, payload.note)
+        if payload.side.lower() == "buy":
+            await _attach_bracket(session, acct, symbol, payload.quantity, payload.take_profit, payload.stop_loss)
     except OrderError as exc:
         await session.rollback()
         return error(str(exc), code="order_rejected")
@@ -240,18 +302,54 @@ async def place_order(
     return ok(
         data={
             "order": {
-                "id": fill.order.id,
-                "symbol": fill.order.symbol,
-                "side": fill.order.side,
-                "quantity": fill.order.quantity,
-                "price": round(fill.order.price, 2),
-                "realized_pnl": fill.order.realized_pnl,
-                "status": fill.order.status,
+                "id": fill.order.id, "symbol": fill.order.symbol, "side": fill.order.side,
+                "quantity": fill.order.quantity, "price": round(fill.order.price, 2),
+                "realized_pnl": fill.order.realized_pnl, "status": fill.order.status,
             },
             "account": snap,
         },
-        message=f"{payload.side.title()} {payload.quantity:g} {payload.symbol.upper()} filled",
+        message=f"{payload.side.title()} {payload.quantity:g} {symbol} filled @ {round(fill.order.price, 2)}",
     )
+
+
+def _pending_dict(p: PendingOrder) -> dict:
+    return {
+        "id": p.id, "symbol": p.symbol, "side": p.side, "kind": p.kind, "role": p.role,
+        "quantity": p.quantity, "trigger_price": round(p.trigger_price, 2),
+        "status": p.status, "note": p.note,
+        "created_at": p.created_at.isoformat() if p.created_at else None,
+    }
+
+
+@router.get("/orders/open")
+async def open_orders(
+    user: User = Depends(get_current_user), session: AsyncSession = Depends(get_session)
+) -> object:
+    acct = await _account(session, user)
+    await process_pending(session, acct)   # fill any that triggered since last check
+    await session.commit()
+    result = await session.execute(
+        select(PendingOrder).where(
+            PendingOrder.user_id == user.id, PendingOrder.status == "open"
+        ).order_by(PendingOrder.created_at.desc())
+    )
+    return ok(data={"orders": [_pending_dict(p) for p in result.scalars().all()]}, message="Open orders")
+
+
+@router.delete("/orders/open/{order_id}")
+async def cancel_pending(
+    order_id: int,
+    user: User = Depends(get_current_user),
+    session: AsyncSession = Depends(get_session),
+) -> object:
+    po = await session.get(PendingOrder, order_id)
+    if po is None or po.user_id != user.id:
+        return error("Order not found.", status_code=404, code="not_found")
+    if po.status == "open":
+        po.status = "cancelled"
+        po.note = "cancelled by user"
+        await session.commit()
+    return ok(data={"id": order_id}, message="Order cancelled")
 
 
 @router.get("/orders")

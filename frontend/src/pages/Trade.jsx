@@ -219,7 +219,8 @@ export default function Trade({ notify }) {
             </div>
 
             <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
-              <OrderTicket symbol={symbol} price={quote?.price} account={account} onFilled={setAccount} notify={notify} />
+              <OrderTicket symbol={symbol} price={quote?.price} account={account} onFilled={(a) => { setAccount(a); loadAccount(); }} notify={notify} />
+              <OpenOrders signal={account?.open_orders} onChange={loadAccount} notify={notify} />
               <Positions account={account} onPick={pickSymbol} onSold={loadAccount} notify={notify} />
               <PositionSizer defaultEquity={account?.equity} price={quote?.price} />
               <Watchlist watch={watch} current={symbol} onPick={pickSymbol} reload={loadWatch} notify={notify} nameMap={nameMap} />
@@ -389,8 +390,12 @@ function Performance({ notify }) {
 }
 
 function OrderTicket({ symbol, price, account, onFilled, notify }) {
+  const [type, setType] = useState("market");
   const [qty, setQty] = useState(10);
-  const [stop, setStop] = useState("");
+  const [limitPrice, setLimitPrice] = useState("");
+  const [stopPrice, setStopPrice] = useState("");   // trigger for a stop order
+  const [tp, setTp] = useState("");                 // bracket take-profit
+  const [sl, setSl] = useState("");                 // bracket stop-loss (also risk sizing)
   const [busy, setBusy] = useState(false);
   const cost = price ? price * (Number(qty) || 0) : null;
   const locked = account?.locked;
@@ -398,20 +403,26 @@ function OrderTicket({ symbol, price, account, onFilled, notify }) {
   const equity = account?.equity || 0;
   const riskPct = account?.risk_per_trade_pct ?? 1;
 
-  const perShare = price && stop ? Math.abs(price - Number(stop)) : 0;
+  const perShare = price && sl ? Math.abs(price - Number(sl)) : 0;
   const riskAmt = perShare && qty ? perShare * Number(qty) : 0;
 
   const submit = useCallback(async (side) => {
     if (!qty || qty <= 0 || busy || locked) return;
+    if (type === "limit" && !limitPrice) { notify("Enter a limit price"); return; }
+    if (type === "stop" && !stopPrice) { notify("Enter a stop trigger price"); return; }
     setBusy(true);
     try {
-      const res = await api.tradeOrder(symbol, side, Number(qty));
+      const opts = { type };
+      if (type === "limit") opts.limit_price = Number(limitPrice);
+      if (type === "stop") opts.stop_price = Number(stopPrice);
+      if (side === "buy") { if (tp) opts.take_profit = Number(tp); if (sl) opts.stop_loss = Number(sl); }
+      const res = await api.tradeOrder(symbol, side, Number(qty), opts);
       onFilled(res.account);
-      notify(`${side === "buy" ? "Bought" : "Sold"} ${qty} ${symbol} @ ${money(res.order.price)}`);
+      if (res.order) notify(`${side === "buy" ? "Bought" : "Sold"} ${qty} ${symbol} @ ${money(res.order.price)}`);
+      else notify(res.filled ? `Filled ${side} ${qty} ${symbol}` : `${type} order resting for ${symbol}`);
     } catch (err) { notify(err.message); } finally { setBusy(false); }
-  }, [qty, busy, locked, symbol, onFilled, notify]);
+  }, [qty, busy, locked, symbol, type, limitPrice, stopPrice, tp, sl, onFilled, notify]);
 
-  // B / S hotkeys (ignored while typing in a field)
   useEffect(() => {
     const h = (e) => {
       const tag = (e.target.tagName || "").toLowerCase();
@@ -425,7 +436,7 @@ function OrderTicket({ symbol, price, account, onFilled, notify }) {
 
   function quick(frac) { if (price) setQty(Math.max(1, Math.floor((cash * frac) / price))); }
   function sizeFromRisk() {
-    if (!price || !stop || perShare <= 0) { notify("Enter a stop to size from risk"); return; }
+    if (!price || !sl || perShare <= 0) { notify("Enter a stop-loss to size from risk"); return; }
     const n = Math.floor((equity * (riskPct / 100)) / perShare);
     if (n < 1) { notify("Risk too small for one share at this stop"); return; }
     setQty(n);
@@ -437,16 +448,24 @@ function OrderTicket({ symbol, price, account, onFilled, notify }) {
         <h3 style={{ margin: 0 }}>Order ticket</h3>
         <span className="muted" style={{ fontSize: 11 }}>hotkeys B / S</span>
       </div>
+      <div className="seg" style={{ marginTop: 8 }}>
+        {["market", "limit", "stop"].map((t) => (
+          <button key={t} type="button" className={type === t ? "active" : ""} onClick={() => setType(t)} style={{ textTransform: "capitalize" }}>{t}</button>
+        ))}
+      </div>
       <div className="muted mono" style={{ fontSize: 13, margin: "8px 0" }}>{symbol} @ {money(price)}</div>
-      <label>Quantity<input className="mono" type="number" min="0" step="1" value={qty} onChange={(e) => setQty(e.target.value)} /></label>
+      {type === "limit" && <label>Limit price<input className="mono" type="number" step="0.01" value={limitPrice} onChange={(e) => setLimitPrice(e.target.value)} placeholder="fill at or better" /></label>}
+      {type === "stop" && <label>Stop trigger<input className="mono" type="number" step="0.01" value={stopPrice} onChange={(e) => setStopPrice(e.target.value)} placeholder="fills at market when crossed" /></label>}
+      <label style={{ marginTop: type === "market" ? 0 : 8 }}>Quantity<input className="mono" type="number" min="0" step="1" value={qty} onChange={(e) => setQty(e.target.value)} /></label>
       <div className="qty-quick">
         {[["25%", 0.25], ["50%", 0.5], ["100%", 1]].map(([l, f]) => (
           <button key={l} type="button" className="mini-btn" onClick={() => quick(f)}>{l}</button>
         ))}
       </div>
-      <label style={{ marginTop: 8 }}>Stop (optional, for risk sizing)
-        <input className="mono" type="number" step="0.01" value={stop} onChange={(e) => setStop(e.target.value)} placeholder="e.g. below support" />
-      </label>
+      <div className="bracket">
+        <label>Take profit<input className="mono" type="number" step="0.01" value={tp} onChange={(e) => setTp(e.target.value)} placeholder="optional" /></label>
+        <label>Stop loss<input className="mono" type="number" step="0.01" value={sl} onChange={(e) => setSl(e.target.value)} placeholder="optional" /></label>
+      </div>
       <div className="qty-quick">
         <button type="button" className="mini-btn" onClick={sizeFromRisk}>Size {riskPct}% risk</button>
         {riskAmt > 0 && <span className="muted mono" style={{ fontSize: 12, alignSelf: "center" }}>risk {money(riskAmt)}</span>}
@@ -456,6 +475,37 @@ function OrderTicket({ symbol, price, account, onFilled, notify }) {
       <div className="bs">
         <button className="buy" disabled={busy || locked} onClick={() => submit("buy")}>Buy</button>
         <button className="sell" disabled={busy || locked} onClick={() => submit("sell")}>Sell</button>
+      </div>
+      {(tp || sl) && <p className="muted" style={{ fontSize: 11, marginTop: 6 }}>TP/SL attach as a bracket (OCO) on a buy.</p>}
+    </div>
+  );
+}
+
+function OpenOrders({ signal, onChange, notify }) {
+  const [orders, setOrders] = useState([]);
+  const load = useCallback(async () => {
+    try { setOrders((await api.tradeOrdersOpen()).orders); } catch { /* non-fatal */ }
+  }, []);
+  useEffect(() => { load(); }, [load, signal]);
+  async function cancel(id) {
+    try { await api.tradeCancelOrder(id); load(); onChange?.(); notify("Order cancelled"); }
+    catch (err) { notify(err.message); }
+  }
+  if (!orders.length) return null;
+  return (
+    <div className="card">
+      <h3>Open orders</h3>
+      <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+        {orders.map((o) => (
+          <div className="row" key={o.id}>
+            <span style={{ fontSize: 13 }}>
+              <b className="mono">{o.symbol}</b>{" "}
+              <span className={o.side === "buy" ? "up" : "down"}>{o.side}</span>{" "}
+              <span className="muted">{o.kind}{o.role !== "entry" ? ` · ${o.role}` : ""} ×{o.quantity} @ {money(o.trigger_price)}</span>
+            </span>
+            <button className="close-btn" onClick={() => cancel(o.id)}>Cancel</button>
+          </div>
+        ))}
       </div>
     </div>
   );

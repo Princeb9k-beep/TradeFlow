@@ -200,6 +200,35 @@ def test_coach_stats_and_risk(client):
     assert "warnings" in r and isinstance(r["warnings"], list)
 
 
+def test_order_types(client):
+    trader = _auth(client, "orders@example.com")
+    price = client.get("/trading/quote/AAPL", headers=trader).json()["data"]["price"]
+
+    # A limit buy far below market rests (does not fill).
+    r = client.post("/trading/orders", json={"symbol": "AAPL", "side": "buy", "quantity": 2, "type": "limit", "limit_price": round(price * 0.5, 2)}, headers=trader)
+    assert r.status_code == 200
+    d = r.json()["data"]
+    assert d["filled"] is False and d["pending"]["kind"] == "limit"
+    oid = d["pending"]["id"]
+
+    # It shows in open orders, then cancels.
+    opn = client.get("/trading/orders/open", headers=trader).json()["data"]["orders"]
+    assert any(x["id"] == oid for x in opn)
+    assert client.delete(f"/trading/orders/open/{oid}", headers=trader).status_code == 200
+    opn2 = client.get("/trading/orders/open", headers=trader).json()["data"]["orders"]
+    assert not any(x["id"] == oid for x in opn2)
+
+    # A marketable limit buy (trigger above price) fills immediately.
+    r2 = client.post("/trading/orders", json={"symbol": "AAPL", "side": "buy", "quantity": 1, "type": "limit", "limit_price": round(price * 1.2, 2)}, headers=trader)
+    assert r2.json()["data"]["filled"] is True
+
+    # A market buy with a bracket creates two resting OCO sells (tp + sl).
+    r3 = client.post("/trading/orders", json={"symbol": "MSFT", "side": "buy", "quantity": 3, "type": "market", "take_profit": 100000, "stop_loss": 1}, headers=trader)
+    assert r3.status_code == 200
+    br = [x for x in client.get("/trading/orders/open", headers=trader).json()["data"]["orders"] if x["symbol"] == "MSFT"]
+    assert len(br) == 2 and {x["role"] for x in br} == {"tp", "sl"}
+
+
 def test_market_challenge(client):
     trader = _auth(client, "game@example.com")
     r = client.get("/trading/challenge/new?symbol=AAPL&timeframe=1d", headers=trader)
